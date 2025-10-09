@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "960380088360",
+    "project_id": "hinduconnectproject",
+    "storage_bucket": "hinduconnectproject.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:960380088360:android:1e80a7094ef1580481851d",
+        "android_client_info": {
+          "package_name": "com.dikonda.hinduconnect"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "960380088360-n45anli5nq39vkvqfhlt7gg5i84vl0cu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.dikonda.hinduconnect",
+            "certificate_hash": "7713886da1c3fff68200c5532e165f57c0341b53"
+          }
+        },
+        {
+          "client_id": "960380088360-jmq3l4sh8lof7tgfq1ek8f0mp94r3a16.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBimj86jwSlLlRM39zToJSWpGPurpVXo9s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "960380088360-c3faq6pfbs02763nvk4vp3i1kn393gcu.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

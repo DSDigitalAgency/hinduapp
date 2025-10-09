@@ -1,0 +1,120 @@
+workflows:
+  hindu-connect-ios:
+    name: Hindu Connect iOS
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        # App Store Connect API Key
+        APP_STORE_CONNECT_ISSUER_ID: Encrypted(...) # Add your issuer ID
+        APP_STORE_CONNECT_KEY_IDENTIFIER: Encrypted(...) # Add your key identifier
+        APP_STORE_CONNECT_PRIVATE_KEY: Encrypted(...) # Add your private key
+        
+        # Bundle ID and App Info
+        BUNDLE_ID: com.dikonda.hinduconnect
+        APP_NAME: Hindu Connect
+        APP_VERSION: 1.0.2
+        BUILD_NUMBER: 8
+        
+        # Firebase Configuration
+        FIREBASE_PROJECT_ID: hinduconnectproject
+        
+        # Signing
+        CERTIFICATE_PRIVATE_KEY: Encrypted(...) # Add your certificate private key
+        APP_STORE_CONNECT_API_KEY_ID: Encrypted(...) # Add your API key ID
+        APP_STORE_CONNECT_ISSUER_ID: Encrypted(...) # Add your issuer ID
+        APP_STORE_CONNECT_PRIVATE_KEY: Encrypted(...) # Add your private key
+        
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: 'main'
+          include: true
+        - pattern: 'release/*'
+          include: true
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+    
+    scripts:
+      - name: Set up keychain to be used by codesigning
+        script: |
+          keychain initialize
+      
+      - name: Fetch signing files
+        script: |
+          # Create the keychain with a list of empty keychains
+          keychain add-certificates
+      
+      - name: Set up signing certificate
+        script: |
+          # Add the certificate to keychain
+          keychain add-certificates
+      
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+      
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      
+      - name: Install pods
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      
+      - name: Flutter analyze
+        script: |
+          flutter analyze
+      
+      - name: Flutter unit tests
+        script: |
+          flutter test
+      
+      - name: Build ipa for distribution
+        script: |
+          flutter build ipa \
+            --release \
+            --build-name="$APP_VERSION" \
+            --build-number="$BUILD_NUMBER" \
+            --export-options-plist=/Users/builder/export_options.plist
+      
+      - name: Build app for App Store Connect
+        script: |
+          flutter build ipa \
+            --release \
+            --build-name="$APP_VERSION" \
+            --build-number="$BUILD_NUMBER"
+    
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    
+    publishing:
+      app_store_connect:
+        auth:
+          api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+          key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+          issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false
+        beta_groups:
+          - group name 1
+          - group name 2
+      email:
+        recipients:
+          - your-email@example.com
+        notify:
+          success: true
+          failure: false
+      slack:
+        channel: '#releases'
+        notify:
+          success: true
+          failure: true
