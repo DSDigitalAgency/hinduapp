@@ -22,6 +22,9 @@ workflows:
         # Firebase Configuration
         FIREBASE_PROJECT_ID: hinduconnectproject
         
+        # Shorebird Configuration (disabled)
+        SHOREBIRD_TOKEN: ""
+        
         # Signing
         CERTIFICATE_PRIVATE_KEY: Encrypted(...) # Add your certificate private key
         APP_STORE_CONNECT_API_KEY_ID: Encrypted(...) # Add your API key ID
