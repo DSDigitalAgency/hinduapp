@@ -363,6 +363,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           _buildDivider(),
           _buildSupportMenuItem(
+            Icons.favorite_outline,
+            'Donate',
+            'Support Hindu Connect and help us grow',
+            () => _launchURL('https://hinduconnect.app/donate'),
+          ),
+          _buildDivider(),
+          _buildSupportMenuItem(
             Icons.privacy_tip_outlined,
             'Privacy Policy',
             'Read our privacy policy and terms',

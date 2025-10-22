@@ -77,6 +77,8 @@ class _SacredTextReadingScreenState
 
   @override
   void dispose() {
+    // Disable screen protection when leaving the screen
+    ScreenProtector.protectDataLeakageOff();
     _scrollController.dispose();
     super.dispose();
   }
@@ -297,7 +299,29 @@ class _SacredTextReadingScreenState
 
   Future<void> _shareContent() async {
     try {
-      await SharePlus.instance.share(ShareParams(text: _getSacredTextContent()));
+      final sacredTextId = _sacredTextModel?.id ?? widget.sacredTextId;
+      final title = _getSacredTextTitle();
+      final content = _getSacredTextContent();
+      
+      // Create preview for sharing (first 200 characters)
+      String sharePreview = content;
+      if (sharePreview.length > 200) {
+        sharePreview = '${sharePreview.substring(0, 200)}...';
+      }
+
+      final shareText = '''
+$title
+
+$sharePreview
+
+Read more in Hindu Connect App:
+hinduconnect://sacredtext/$sacredTextId
+
+Download Hindu Connect:
+www.hinduconnect.app
+''';
+      
+      await SharePlus.instance.share(ShareParams(text: shareText));
     } catch (e) {
       // Handle error silently
     }

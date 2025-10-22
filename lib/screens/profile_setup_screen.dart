@@ -25,8 +25,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   String? _city;
   String? _state;
   String? _pincodeError;
-  String _selectedLanguage = 'itrans (English)';
-  String _selectedLanguageCode = 'en';
+  String _selectedLanguage = 'Devanagari (Hindi)';
+  String _selectedLanguageCode = 'hi';
   
   // List of all supported languages (same order as profile screen)
   static const List<Map<String, String>> _languages = [

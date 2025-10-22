@@ -146,7 +146,24 @@ class _HinduConnectAppState extends State<HinduConnectApp> {
       _navigateToBiography(biographyId);
       return;
     }
-    // TODO: extend to other content types as needed (stotra, temple, video)
+    
+    if (link.startsWith('hinduconnect://sacredtext/')) {
+      final sacredTextId = link.replaceFirst('hinduconnect://sacredtext/', '');
+      _navigateToSacredText(sacredTextId);
+      return;
+    }
+    
+    if (link.startsWith('hinduconnect://temple/')) {
+      final templeId = link.replaceFirst('hinduconnect://temple/', '');
+      _navigateToTemple(templeId);
+      return;
+    }
+    
+    if (link.startsWith('hinduconnect://post/')) {
+      final postId = link.replaceFirst('hinduconnect://post/', '');
+      _navigateToPost(postId);
+      return;
+    }
   }
 
   void _navigateToBiography(String biographyId) async {
@@ -161,6 +178,43 @@ class _HinduConnectAppState extends State<HinduConnectApp> {
           ),
         ),
       );
+    } catch (_) {}
+  }
+
+  void _navigateToSacredText(String sacredTextId) async {
+    if (!mounted) return;
+    try {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SacredTextReadingScreen(
+            sacredTextId: sacredTextId,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  void _navigateToTemple(String templeId) async {
+    if (!mounted) return;
+    try {
+      // Import temple reading screen if needed
+      // Navigator.of(context).push(
+      //   MaterialPageRoute(
+      //     builder: (_) => TempleReadingScreen(templeId: templeId),
+      //   ),
+      // );
+    } catch (_) {}
+  }
+
+  void _navigateToPost(String postId) async {
+    if (!mounted) return;
+    try {
+      // Import post reader screen if needed
+      // Navigator.of(context).push(
+      //   MaterialPageRoute(
+      //     builder: (_) => PostReaderScreen(postId: postId),
+      //   ),
+      // );
     } catch (_) {}
   }
 
