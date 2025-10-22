@@ -299,8 +299,6 @@ class _SacredTextReadingScreenState
 
   Future<void> _shareContent() async {
     try {
-      final sacredTextId = _sacredTextModel?.id ?? widget.sacredTextId;
-      final title = _getSacredTextTitle();
       final content = _getSacredTextContent();
       
       // Create preview for sharing (first 200 characters)
@@ -310,15 +308,10 @@ class _SacredTextReadingScreenState
       }
 
       final shareText = '''
-$title
-
 $sharePreview
 
 Read more in Hindu Connect App:
-hinduconnect://sacredtext/$sacredTextId
-
-Download Hindu Connect:
-www.hinduconnect.app
+https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
 ''';
       
       await SharePlus.instance.share(ShareParams(text: shareText));

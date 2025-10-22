@@ -245,21 +245,11 @@ class _TempleReadingScreenState extends ConsumerState<TempleReadingScreen> with 
   }
 
   Future<void> _shareTemple() async {
-    final templeId = _detailedTempleModel?.templeId ?? 
-                     _templeModel?.templeId ?? 
-                     widget.temple?['templeId'] ?? 
-                     'unknown';
-    
     final shareText = '''
-${_getTempleTitle()}
-
 ${_getTempleContent().substring(0, _getTempleContent().length > 200 ? 200 : _getTempleContent().length)}...
 
 Read more in Hindu Connect App:
-hinduconnect://temple/$templeId
-
-Download Hindu Connect:
-www.hinduconnect.app
+https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
 ''';
 
     // FIXED: Correctly call the share method

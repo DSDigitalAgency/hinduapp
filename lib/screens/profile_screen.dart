@@ -1330,6 +1330,8 @@ Sent from Hindu Connect App
           title = 'Help & FAQ';
         } else if (url.contains('about.html')) {
           title = 'About Hindu Connect';
+        } else if (url.contains('donate')) {
+          title = 'Donate';
         }
         
         // Navigate to custom WebView screen

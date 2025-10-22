@@ -219,11 +219,10 @@ class _PostReaderScreenState extends ConsumerState<PostReaderScreen>
 
       final shareText =
           '''
-${widget.post.basicInfo.title}
-
 $sharePreview
 
-Read more: ${_getDeepLink()}
+Read more in Hindu Connect App:
+https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
 ''';
       await SharePlus.instance.share(ShareParams(text: shareText));
     } catch (e) {
@@ -237,11 +236,6 @@ Read more: ${_getDeepLink()}
         );
       }
     }
-  }
-
-  String _getDeepLink() {
-    final postId = widget.post.id;
-    return 'https://hinduconnect.app/post/$postId';
   }
 
   void _showReadingSettings() {

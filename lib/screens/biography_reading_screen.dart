@@ -204,20 +204,13 @@ class _BiographyReadingScreenState extends ConsumerState<BiographyReadingScreen>
 
   Future<void> _shareContent() async {
     if (_biography == null) return;
-    
-    final biographyId = _biography!.biographyId ?? _biography!.id;
 
     final shareText =
         '''
-${_biography!.displayTitle}
-
 ${_biography!.displayContent.substring(0, _biography!.displayContent.length > 200 ? 200 : _biography!.displayContent.length)}...
 
 Read more in Hindu Connect App:
-hinduconnect://biography/$biographyId
-
-Download Hindu Connect:
-www.hinduconnect.app
+https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
 ''';
 
     await SharePlus.instance.share(ShareParams(text: shareText));
