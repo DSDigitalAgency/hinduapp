@@ -1,53 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 class ApiService {
   static const String baseUrl = 'https://api.hinduconnect.app';
   static const String apiPrefix = '/api/v1';
 
-  
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
-  
-  // Get stored auth token (fallback)
-  Future<String?> getAuthToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token');
-  }
-  
-  // Save auth token
-  Future<void> saveAuthToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
-  }
-  
-  // Remove auth token
-  Future<void> removeAuthToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-  }
-  
-  // Get Firebase ID token (primary authentication method)
-  Future<String?> getFirebaseIdToken() async {
-    try {
-      final User? user = _firebaseAuth.currentUser;
-      if (user != null) {
-        // Debug logging removed for production
-        // Use cached token for speed; refresh handled on 401 in makeRequest
-        final token = await user.getIdToken();
-        // Debug logging removed for production
-        return token;
-      }
-      // Debug logging removed for production
-      return null;
-    } catch (e) {
-      // Debug logging removed for production
-      return null;
-    }
-  }
-  
-  // Get headers with auth token if available
+  // Get headers without auth token
   Future<Map<String, String>> getHeaders() async {
     final headers = {
       'Content-Type': 'application/json',
@@ -57,26 +15,7 @@ class ApiService {
       'Expires': '0',
     };
     
-    // Try to get Firebase ID token first (preferred)
-    String? token = await getFirebaseIdToken();
-    
-    // Fallback to stored backend token if Firebase token is not available
-    token ??= await getAuthToken();
-    
-    if (token != null) {
-      headers['Authorization'] = 'Bearer $token';
-      // Debug logging removed for production
-    } else {
-      // Debug logging removed for production
-    }
-    
-    // Add Firebase UID for additional verification if user is logged in
-    final User? user = _firebaseAuth.currentUser;
-    if (user != null) {
-      headers['X-Firebase-UID'] = user.uid;
-      // Debug logging removed for production
-    }
-    
+    // No authentication tokens - app works without authentication
     return headers;
   }
   
@@ -102,17 +41,10 @@ class ApiService {
         
     final headers = await getHeaders();
     
-    // Log request details for debugging (redact sensitive values)
-    if (log) {
-      final redactedHeaders = Map<String, String>.from(headers);
-      if (redactedHeaders.containsKey('Authorization')) {
-        redactedHeaders['Authorization'] = 'Bearer <redacted>';
+      // Log request details for debugging
+      if (log) {
+        // Request logging can be added here if needed
       }
-      if (redactedHeaders.containsKey('X-Firebase-UID')) {
-        redactedHeaders['X-Firebase-UID'] = '<redacted>';
-      }
-      
-    }
     
     http.Response response;
     
@@ -162,22 +94,9 @@ class ApiService {
       throw Exception('Network error: $e');
     }
     
-    // Handle authentication errors
+    // Handle authentication errors (no longer needed, but kept for API error handling)
     if (response.statusCode == 401 && retryOnAuthFailure) {
-      // Try to refresh Firebase token and retry once
-      try {
-        await _refreshAuthToken();
-        return await makeRequest(
-          method, 
-          endpoint, 
-          body: body, 
-          queryParams: queryParams, 
-          retryOnAuthFailure: false // Prevent infinite retry
-        );
-      } catch (refreshError) {
-
-        // Continue with original response handling
-      }
+      // No authentication - just throw error
     }
     
     // Handle other error status codes
@@ -245,45 +164,6 @@ class ApiService {
         data: finalResponse,
       );
     }
-  }
-  
-  // Refresh authentication token
-  Future<void> _refreshAuthToken() async {
-    try {
-      final User? user = _firebaseAuth.currentUser;
-      if (user != null) {
-        // Force refresh the Firebase ID token
-        await user.getIdToken(true);
-      }
-    } catch (e) {
-      throw Exception('Token refresh failed: $e');
-    }
-  }
-  
-  // Authentication endpoints
-  Future<Map<String, dynamic>> login(Map<String, dynamic> loginData) async {
-    return await makeRequest('POST', '/auth/login', body: loginData);
-  }
-  
-  Future<Map<String, dynamic>> register(Map<String, dynamic> registerData) async {
-    return await makeRequest('POST', '/auth/register', body: registerData);
-  }
-  
-  Future<Map<String, dynamic>> refreshToken() async {
-    return await makeRequest('POST', '/auth/refresh');
-  }
-  
-  // User endpoints
-  Future<Map<String, dynamic>> createUser(Map<String, dynamic> userData) async {
-    return await makeRequest('POST', '/users', body: userData);
-  }
-  
-  Future<Map<String, dynamic>> getUser(String id) async {
-    return await makeRequest('GET', '/users/$id');
-  }
-  
-  Future<Map<String, dynamic>> updateUser(String id, Map<String, dynamic> userData) async {
-    return await makeRequest('PATCH', '/users/$id', body: userData);
   }
   
   // Health check

@@ -40,14 +40,22 @@ class LanguageConversionService {
     'Newa (Nepal Bhasa)',
     'Old Persian',
     'Old South Arabian',
+    'Persian',
     'Phoenician',
     'Psalter Pahlavi',
+    'Ranjana (Lantsa)',
     'Samaritan',
+    'Santali (Ol Chiki)',
+    'Sharada',
     'Siddham',
+    'Sinhala',
     'Sogdian',
-    'Syriac Eastern',
-    'Syriac Estrangela',
-    'Syriac Western',
+    'Soyombo',
+    'Syriac (Eastern)',
+    'Syriac (Estrangela)',
+    'Syriac (Western)',
+    'Tamil Brahmi',
+    'Thaana (Dhivehi)',
     'Thai',
     'Tibetan',
     'Ugaritic',
@@ -227,6 +235,7 @@ class LanguageConversionService {
       );
     }
 
+    // Split by paragraphs first, then by chunks if needed
     final paragraphs = sourceText.split('\n\n');
       final convertedParagraphs = <String>[];
 
@@ -239,6 +248,7 @@ class LanguageConversionService {
       }
       
         if (paragraph.length <= maxChunkSize) {
+      // Paragraph is small enough, convert directly
       final converted = await convertText(
         sourceText: paragraph,
         sourceScript: sourceScript,
@@ -246,7 +256,38 @@ class LanguageConversionService {
       );
           convertedParagraphs.add(converted ?? paragraph);
         } else {
-          convertedParagraphs.add(paragraph);
+          // Paragraph is too large, split into chunks and convert each
+          final chunks = <String>[];
+          int start = 0;
+          
+          while (start < paragraph.length) {
+            int end = (start + maxChunkSize).clamp(0, paragraph.length);
+            // Try to break at a word boundary or line break if possible
+            if (end < paragraph.length) {
+              // Look for line break or space near the end
+              int breakPoint = end;
+              for (int j = end - 1; j > start + (maxChunkSize * 0.8).toInt(); j--) {
+                if (paragraph[j] == '\n' || paragraph[j] == ' ') {
+                  breakPoint = j + 1;
+                  break;
+                }
+              }
+              end = breakPoint;
+            }
+            
+            final chunk = paragraph.substring(start, end);
+            if (chunk.isNotEmpty) {
+              final converted = await convertText(
+                sourceText: chunk,
+                sourceScript: sourceScript,
+                targetScript: targetScript,
+              );
+              chunks.add(converted ?? chunk);
+            }
+            start = end;
+          }
+          
+          convertedParagraphs.add(chunks.join(''));
         }
       }
 

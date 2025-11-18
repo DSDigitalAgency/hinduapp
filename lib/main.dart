@@ -1,32 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:app_links/app_links.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hindu_connect/services/logger_service.dart';
 import 'dart:async';
-import 'firebase_options.dart';
-import 'screens/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
 import 'screens/biography_reading_screen.dart';
 import 'screens/sacred_text_reading_screen.dart';
-import 'screens/profile_setup_screen.dart';
+import 'screens/temple_reading_screen.dart';
 import 'screens/ad_splash_screen.dart';
-import 'services/auth_service.dart';
+import 'screens/language_selection_screen.dart';
 import 'models/sacred_text_model.dart';
 import 'constants/app_theme.dart';
 import 'providers/reading_settings_provider.dart';
+import 'services/local_storage_service.dart';
+import 'services/deferred_deep_link_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Initialize logger service first
   logger.initialize();
-  
-  // Initialize Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
   
   // Completely disable Flutter error handling to prevent loops
   FlutterError.onError = null;
@@ -109,6 +104,7 @@ class HinduConnectApp extends StatefulWidget {
 class _HinduConnectAppState extends State<HinduConnectApp> {
   final _appLinks = AppLinks();
   StreamSubscription? _linkSubscription;
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
@@ -126,43 +122,250 @@ class _HinduConnectAppState extends State<HinduConnectApp> {
     // Handle app started from deep link
     final initialLink = await _appLinks.getInitialLink();
     if (initialLink != null) {
-      _handleDeepLink(initialLink.toString());
+      logger.debug('Received initial deep link: $initialLink');
+      logger.debug('Initial link string: ${initialLink.toString()}');
+      logger.debug('Initial link scheme: ${initialLink.scheme}');
+      logger.debug('Initial link path: ${initialLink.path}');
+      logger.debug('Initial link pathSegments: ${initialLink.pathSegments}');
+      // Store deep link to be handled after splash screen
+      await _storeDeepLinkForSplash(initialLink);
+    } else {
+      logger.debug('No initial deep link found');
     }
 
     // Handle deep links when app is already running
     _linkSubscription = _appLinks.uriLinkStream.listen((Uri? uri) {
       if (uri != null) {
-        _handleDeepLink(uri.toString());
+        logger.debug('Received deep link while app running: $uri');
+        // When app is already running, navigate directly
+        _handleDeepLink(uri);
       }
     }, onError: (err) {
-      // Handle deep link error silently
+      logger.error('Error in deep link stream: $err');
     });
   }
 
-  void _handleDeepLink(String link) {
-    // Parse the deep link
-    if (link.startsWith('hinduconnect://biography/')) {
-      final biographyId = link.replaceFirst('hinduconnect://biography/', '');
-      _navigateToBiography(biographyId);
-      return;
+  /// Store deep link data to be handled after splash screen
+  Future<void> _storeDeepLinkForSplash(Uri uri) async {
+    try {
+      logger.debug('Storing deep link for splash: $uri');
+      final prefs = await SharedPreferences.getInstance();
+      String? path;
+      String? id;
+      
+      logger.debug('URI details - scheme: ${uri.scheme}, host: ${uri.host}, path: ${uri.path}, pathSegments: ${uri.pathSegments}, authority: ${uri.authority}');
+      
+      // Handle both custom scheme (hinduconnect://) and HTTPS universal links
+      if (uri.scheme == 'hinduconnect') {
+        // Custom scheme deep link format: hinduconnect://sacredtext/123
+        // For custom schemes, Android may put content type in host/authority
+        // and ID in path, OR both in path segments
+        
+        // First, try to parse from the full URI string using regex (most reliable)
+        final uriString = uri.toString();
+        final match = RegExp(r'hinduconnect://([^/]+)/(.+)').firstMatch(uriString);
+        if (match != null) {
+          path = match.group(1);
+          id = match.group(2);
+          logger.debug('Parsed from regex - path: $path, id: $id');
+        } else {
+          // Fallback: Check if host/authority has the content type
+          // Android may parse hinduconnect://temple/123 as host=temple, path=/123
+          if (uri.host.isNotEmpty && uri.pathSegments.isNotEmpty) {
+            // Content type is in host, ID is in path
+            path = uri.host;
+            id = uri.pathSegments[0];
+            logger.debug('Parsed from host and path - path: $path, id: $id');
+          } else if (uri.pathSegments.length >= 2) {
+            // Both in path segments
+            path = uri.pathSegments[0];
+            id = uri.pathSegments[1];
+            logger.debug('Parsed from path segments - path: $path, id: $id');
+          } else if (uri.pathSegments.length == 1) {
+            // Only ID in path, try authority for type
+            if (uri.authority.isNotEmpty) {
+              path = uri.authority;
+              id = uri.pathSegments[0];
+              logger.debug('Parsed from authority and path - path: $path, id: $id');
+            } else {
+              path = 'post';
+              id = uri.pathSegments[0];
+            }
+          }
+        }
+      } else if (uri.scheme == 'https' && uri.host.contains('hinduconnect')) {
+        // Universal link (HTTPS) format: https://hinduconnect.app/sacredtext/123
+        if (uri.pathSegments.length >= 2) {
+          path = uri.pathSegments[0];
+          id = uri.pathSegments[1];
+        } else if (uri.pathSegments.length == 1) {
+          path = 'post';
+          id = uri.pathSegments[0];
+        }
+      }
+      
+      logger.debug('Extracted - path: $path, id: $id');
+      
+      if (path != null && id != null && id.isNotEmpty) {
+        // Decode URL-encoded IDs
+        id = Uri.decodeComponent(id);
+        // Store for splash screen to handle
+        await prefs.setString('pendingDeepLinkType', path);
+        await prefs.setString('pendingDeepLinkId', id);
+        logger.debug('Stored deep link - type: $path, id: $id');
+      } else {
+        logger.debug('Failed to extract path or id from deep link');
+      }
+    } catch (e) {
+      logger.error('Error storing deep link for splash: $e');
     }
+  }
+
+  void _handleDeepLink(Uri uri) {
+    try {
+      logger.debug('Handling deep link: $uri');
+      logger.debug('URI scheme: ${uri.scheme}, host: ${uri.host}, path: ${uri.path}, pathSegments: ${uri.pathSegments}, authority: ${uri.authority}');
+      
+      String? path;
+      String? id;
+      
+      // Handle both custom scheme (hinduconnect://) and HTTPS universal links
+      if (uri.scheme == 'hinduconnect') {
+        // Custom scheme deep link format: hinduconnect://sacredtext/123
+        // For custom schemes, Android may put content type in host/authority
+        // and ID in path, OR both in path segments
+        
+        // First, try to parse from the full URI string using regex (most reliable)
+        final uriString = uri.toString();
+        final match = RegExp(r'hinduconnect://([^/]+)/(.+)').firstMatch(uriString);
+        if (match != null) {
+          path = match.group(1);
+          id = match.group(2);
+          logger.debug('Parsed from regex - path: $path, id: $id');
+        } else {
+          // Fallback: Check if host/authority has the content type
+          // Android may parse hinduconnect://temple/123 as host=temple, path=/123
+          if (uri.host.isNotEmpty && uri.pathSegments.isNotEmpty) {
+            // Content type is in host, ID is in path
+            path = uri.host;
+            id = uri.pathSegments[0];
+            logger.debug('Parsed from host and path - path: $path, id: $id');
+          } else if (uri.pathSegments.length >= 2) {
+            // Both in path segments
+            path = uri.pathSegments[0];
+            id = uri.pathSegments[1];
+            logger.debug('Parsed from path segments - path: $path, id: $id');
+          } else if (uri.pathSegments.length == 1) {
+            // Only ID in path, try authority for type
+            if (uri.authority.isNotEmpty) {
+              path = uri.authority;
+              id = uri.pathSegments[0];
+              logger.debug('Parsed from authority and path - path: $path, id: $id');
+            } else {
+              path = 'post';
+              id = uri.pathSegments[0];
+            }
+          }
+        }
+      } else if (uri.scheme == 'https' && uri.host.contains('hinduconnect')) {
+        // Universal link (HTTPS) format: https://hinduconnect.app/sacredtext/123
+        if (uri.pathSegments.length >= 2) {
+          path = uri.pathSegments[0];
+          id = uri.pathSegments[1];
+        } else if (uri.pathSegments.length == 1) {
+          path = 'post';
+          id = uri.pathSegments[0];
+        }
+      }
     
-    if (link.startsWith('hinduconnect://sacredtext/')) {
-      final sacredTextId = link.replaceFirst('hinduconnect://sacredtext/', '');
-      _navigateToSacredText(sacredTextId);
-      return;
+      logger.debug('Extracted path: $path, id: $id');
+      
+      if (path == null || id == null) {
+        logger.debug('Could not extract path or id from deep link');
+        return;
+      }
+      
+      // Decode URL-encoded IDs
+      id = Uri.decodeComponent(id);
+      logger.debug('Navigating to $path/$id');
+      
+      // When app is already running, store the link and navigate from current context
+      // We need to navigate from the current navigator context, not from the app widget
+      _navigateToContentFromDeepLink(path, id);
+    } catch (e) {
+      logger.error('Error handling deep link: $e');
     }
-    
-    if (link.startsWith('hinduconnect://temple/')) {
-      final templeId = link.replaceFirst('hinduconnect://temple/', '');
-      _navigateToTemple(templeId);
-      return;
+  }
+  
+  void _navigateToContentFromDeepLink(String path, String id) {
+    // When app is already running, navigate directly
+    // Use the navigator from the current context
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        final context = navigatorKey.currentContext;
+        if (context != null) {
+          logger.debug('Navigating directly to $path/$id from deep link');
+          _navigateToContent(context, path, id);
+        } else {
+          // If no context, store for later
+          logger.debug('No navigator context, storing deep link for later');
+          _storeDeepLinkForNavigation(path, id);
+        }
+      } catch (e) {
+        logger.error('Error navigating to content from deep link: $e');
+        // Fallback: store for later
+        _storeDeepLinkForNavigation(path, id);
+      }
+    });
+  }
+  
+  void _navigateToContent(BuildContext context, String path, String id) {
+    try {
+      switch (path) {
+        case 'biography':
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => BiographyReadingScreen(
+                title: 'Biography',
+                content: 'Loading biography...',
+              ),
+            ),
+          );
+          break;
+        case 'sacredtext':
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => SacredTextReadingScreen(sacredTextId: id),
+            ),
+          );
+          break;
+        case 'temple':
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => TempleReadingScreen(templeId: id),
+            ),
+          );
+          break;
+        case 'post':
+          // TODO: Navigate to post
+          logger.debug('Post navigation not yet implemented');
+          break;
+        default:
+          logger.debug('Unknown content type: $path');
+      }
+    } catch (e) {
+      logger.error('Error navigating to content: $e');
     }
-    
-    if (link.startsWith('hinduconnect://post/')) {
-      final postId = link.replaceFirst('hinduconnect://post/', '');
-      _navigateToPost(postId);
-      return;
+  }
+  
+  Future<void> _storeDeepLinkForNavigation(String path, String id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pendingDeepLinkType', path);
+      await prefs.setString('pendingDeepLinkId', id);
+      logger.debug('Stored deep link for navigation - type: $path, id: $id');
+    } catch (e) {
+      logger.error('Error storing deep link for navigation: $e');
     }
   }
 
@@ -209,26 +412,23 @@ class _HinduConnectAppState extends State<HinduConnectApp> {
   void _navigateToPost(String postId) async {
     if (!mounted) return;
     try {
-      // Import post reader screen if needed
-      // Navigator.of(context).push(
-      //   MaterialPageRoute(
-      //     builder: (_) => PostReaderScreen(postId: postId),
-      //   ),
-      // );
+      // TODO: Fetch post data and navigate to PostReaderScreen
+      // For now, we'll need to fetch the post from API first
+      // This requires importing PostReaderScreen and ApiService
     } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'Hindu Connect',
       theme: AppTheme.lightTheme,
-      home: const AuthGate(),
+      home: const _InitialRoute(),
       routes: {
-        '/login': (context) => const LoginScreen(),
+        '/language-selection': (context) => const LanguageSelectionScreen(),
         '/ad-splash': (context) => const AdSplashScreen(),
         '/home': (context) => const MainNavigationScreen(),
-        '/profile-setup': (context) => const ProfileSetupScreen(),
         '/sacred-text-reading': (context) {
           final args = ModalRoute.of(context)!.settings.arguments as SacredTextModel;
           return SacredTextReadingScreen(
@@ -242,157 +442,60 @@ class _HinduConnectAppState extends State<HinduConnectApp> {
   }
 }
 
-class AuthGate extends StatefulWidget {
-  const AuthGate({super.key});
+class _InitialRoute extends StatefulWidget {
+  const _InitialRoute();
 
   @override
-  State<AuthGate> createState() => _AuthGateState();
+  State<_InitialRoute> createState() => _InitialRouteState();
 }
 
-class _AuthGateState extends State<AuthGate> {
-  final AuthService _authService = AuthService();
-
+class _InitialRouteState extends State<_InitialRoute> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _route();
-    });
+    _checkFirstLaunch();
   }
 
-  Future<void> _route() async {
+  Future<void> _checkFirstLaunch() async {
     try {
-      if (_authService.isLoggedIn) {
-        final isProfileComplete = await _authService.isUserProfileComplete();
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, isProfileComplete ? '/ad-splash' : '/profile-setup');
-      } else {
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/login');
+      // Check for deferred deep link first (only on first run)
+      final deferredContentId = await DeferredDeepLinkService.checkDeferredDeepLink();
+      final deferredLinkData = await DeferredDeepLinkService.getDeferredLinkData();
+      
+      final isLanguageSelected = await LocalStorageService.isLanguageSelected();
+      
+      if (mounted) {
+        // If we have a deferred deep link, store it for later navigation
+        // (after language selection and splash screen)
+        if (deferredContentId != null && deferredLinkData != null) {
+          // Store in SharedPreferences for later use
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('pendingDeferredLinkType', deferredLinkData['type'] ?? 'post');
+          await prefs.setString('pendingDeferredLinkId', deferredLinkData['id'] ?? deferredContentId);
+        }
+        
+        if (isLanguageSelected) {
+          // Language already selected, go to splash screen
+          Navigator.of(context).pushReplacementNamed('/ad-splash');
+        } else {
+          // First launch, show language selection
+          Navigator.of(context).pushReplacementNamed('/language-selection');
+        }
       }
-    } catch (_) {
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/login');
+    } catch (e) {
+      // On error, show language selection screen
+      if (mounted) {
+        Navigator.of(context).pushReplacementNamed('/language-selection');
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Flutter splash UI matching brand
-    return const _BrandedSplash();
-  }
-}
-
-class _BrandedSplash extends StatefulWidget {
-  const _BrandedSplash();
-
-  @override
-  State<_BrandedSplash> createState() => _BrandedSplashState();
-}
-
-class _BrandedSplashState extends State<_BrandedSplash> {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFFF6600),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            // Center content
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  // Logo
-                  _Logo(),
-                  SizedBox(height: 16),
-                  // App name
-                  Text(
-                    'Hindu Connect',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  // Tag line
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      'World 1st Complete Devotional Mobile App',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 24),
-                  // Loading indicator for Android 10 compatibility
-                  SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      strokeWidth: 2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Bottom line
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 24,
-              child: const Text(
-                'connecting hearts with Devotion.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ),
-          ],
-        ),
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(),
       ),
-    );
-  }
-}
-
-class _Logo extends StatelessWidget {
-  const _Logo();
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'assets/app_logo.png',
-      width: 120,
-      height: 120,
-      fit: BoxFit.contain,
-      errorBuilder: (context, error, stackTrace) {
-        // Fallback to text if image fails to load (common on Android 10)
-        return Container(
-          width: 120,
-          height: 120,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(
-            Icons.auto_stories,
-            size: 60,
-            color: Color(0xFFFF6600),
-          ),
-        );
-      },
     );
   }
 }

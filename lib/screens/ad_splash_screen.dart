@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ads_service.dart';
 import '../services/data_preloader_service.dart';
 import '../services/logger_service.dart';
+import '../services/deferred_deep_link_service.dart';
 import '../constants/app_theme.dart';
+import 'post_reader_screen.dart';
+import 'sacred_text_reading_screen.dart';
+import 'temple_reading_screen.dart';
+import 'biography_reading_screen.dart';
 
 class AdSplashScreen extends StatefulWidget {
   const AdSplashScreen({super.key});
@@ -145,8 +151,96 @@ class AdSplashScreen extends StatefulWidget {
     _navigateToHome();
   }
 
-  void _navigateToHome() {
+  void _navigateToHome() async {
     if (mounted) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        
+        // First, check for regular deep link (app opened from link)
+        final pendingType = prefs.getString('pendingDeepLinkType');
+        final pendingId = prefs.getString('pendingDeepLinkId');
+        
+        logger.debug('Checking for deep links - pendingType: $pendingType, pendingId: $pendingId');
+        
+        if (pendingType != null && pendingId != null && pendingId.isNotEmpty) {
+          logger.debug('Found regular deep link - navigating to $pendingType/$pendingId');
+          // Clear the pending link
+          await prefs.remove('pendingDeepLinkType');
+          await prefs.remove('pendingDeepLinkId');
+          
+          // Navigate to the content
+          _navigateToDeferredContent(pendingType, pendingId);
+          return;
+        }
+        
+        // Then check for deferred deep link (app installed from link)
+        final deferredType = prefs.getString('pendingDeferredLinkType');
+        final deferredId = prefs.getString('pendingDeferredLinkId');
+        
+        logger.debug('Checking deferred deep link - deferredType: $deferredType, deferredId: $deferredId');
+        
+        if (deferredType != null && deferredId != null && deferredId.isNotEmpty) {
+          logger.debug('Found deferred deep link - navigating to $deferredType/$deferredId');
+          // Clear the pending link
+          await prefs.remove('pendingDeferredLinkType');
+          await prefs.remove('pendingDeferredLinkId');
+          await DeferredDeepLinkService.clearDeferredLinkData();
+          
+          // Navigate to the content
+          _navigateToDeferredContent(deferredType, deferredId);
+          return;
+        }
+        
+        logger.debug('No deep link found, navigating to home');
+      } catch (e) {
+        logger.error('Error handling deep link: $e');
+      }
+      
+      // No deep link, navigate to home normally
+      Navigator.of(context).pushReplacementNamed('/home');
+    }
+  }
+  
+  void _navigateToDeferredContent(String type, String id) {
+    if (!mounted) return;
+    
+    try {
+      switch (type.toLowerCase()) {
+        case 'sacredtext':
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => SacredTextReadingScreen(sacredTextId: id),
+            ),
+          );
+          break;
+        case 'temple':
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => TempleReadingScreen(templeId: id),
+            ),
+          );
+          break;
+        case 'biography':
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => BiographyReadingScreen(
+                title: 'Biography',
+                content: 'Loading biography...',
+              ),
+            ),
+          );
+          break;
+        case 'post':
+        default:
+          // For posts, we need to fetch the post data first
+          // For now, navigate to home and show a message
+          Navigator.of(context).pushReplacementNamed('/home');
+          // TODO: Fetch post data and navigate to PostReaderScreen
+          break;
+      }
+    } catch (e) {
+      logger.error('Error navigating to deferred content: $e');
+      // Fallback to home
       Navigator.of(context).pushReplacementNamed('/home');
     }
   }

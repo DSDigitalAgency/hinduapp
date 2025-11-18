@@ -15,25 +15,14 @@ class FontService {
     
     switch (fontFamily) {
       case 'English':
-        // Try custom font first, fallback to Google Fonts
-        try {
-          return TextStyle(
-            fontSize: fontSize,
-            fontWeight: fontWeight,
-            color: color,
-            height: height,
-            decoration: decoration,
-            fontFamily: 'Noto Sans',
-          );
-        } catch (e) {
-          return GoogleFonts.notoSans(
-            fontSize: fontSize,
-            fontWeight: fontWeight,
-            color: color,
-            height: height,
-            decoration: decoration,
-          );
-        }
+        // Use default app font (no custom font) for Roman itrans (English)
+        return TextStyle(
+          fontSize: fontSize,
+          fontWeight: fontWeight,
+          color: color,
+          height: height,
+          decoration: decoration,
+        );
       
       case 'Devanagari':
         // Try custom font first, fallback to Google Fonts
@@ -197,15 +186,26 @@ class FontService {
         );
       
       case 'Unicode Fallback':
-        // For scripts that might not be fully supported, use a comprehensive Unicode font
-        return TextStyle(
-          fontSize: fontSize,
-          fontWeight: fontWeight,
-          color: color,
-          height: height,
-          decoration: decoration,
-          fontFamily: 'Noto Sans, Roboto, sans-serif',
-        );
+        // For scripts that might not be fully supported, use Google Fonts with comprehensive Unicode coverage
+        try {
+          return GoogleFonts.notoSans(
+            fontSize: fontSize,
+            fontWeight: fontWeight,
+            color: color,
+            height: height,
+            decoration: decoration,
+          );
+        } catch (e) {
+          // Fallback to system font if Google Fonts fails
+          return TextStyle(
+            fontSize: fontSize,
+            fontWeight: fontWeight,
+            color: color,
+            height: height,
+            decoration: decoration,
+            fontFamily: 'Noto Sans',
+          );
+        }
       
       case 'Default':
       default:

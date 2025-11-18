@@ -203,7 +203,8 @@ extension SacredTextModelCopy on SacredTextModel {
       author: author ?? this.author,
       description: description ?? this.description,
       tags: tags ?? this.tags,
-      isConverted: isConverted ?? this.isConverted,
+      // Handle isConverted specially to allow setting to false explicitly
+      isConverted: isConverted != null ? isConverted : this.isConverted,
       originalLanguage: originalLanguage ?? this.originalLanguage,
     );
   }

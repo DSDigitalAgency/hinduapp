@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/favorites_service.dart';
 import '../services/api_service.dart';
 import 'biography_reading_screen.dart';
@@ -102,16 +101,10 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   }
 
   Widget _buildFavoritesList(String filter) {
-    Stream<QuerySnapshot> stream;
-    
-    if (filter == 'all') {
-      stream = _favoritesService.getFavorites();
-    } else {
-      stream = _favoritesService.getFavoritesByType(filter);
-    }
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: stream,
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: filter == 'all' 
+          ? _favoritesService.getAllFavorites()
+          : _favoritesService.getFavoritesByType(filter),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Center(
@@ -154,16 +147,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           );
         }
 
-        final allFavorites = snapshot.data?.docs ?? [];
-        
-        // Filter favorites based on the current filter
-        final favorites = filter == 'all' 
-            ? allFavorites 
-            : allFavorites.where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final itemType = data['itemType'] ?? '';
-                return itemType == filter;
-              }).toList();
+        final favorites = snapshot.data ?? [];
         
         if (favorites.isEmpty) {
           return Center(
@@ -198,13 +182,18 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: favorites.length,
-          itemBuilder: (context, index) {
-            final favorite = favorites[index].data() as Map<String, dynamic>;
-            return _buildFavoriteCard(favorite);
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(() {}); // Refresh the list
           },
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: favorites.length,
+            itemBuilder: (context, index) {
+              final favorite = favorites[index];
+              return _buildFavoriteCard(favorite);
+            },
+          ),
         );
       },
     );
@@ -391,6 +380,7 @@ class _FavoritesScreenState extends State<FavoritesScreen>
     try {
       await _favoritesService.removeFromFavorites(itemId);
       if (mounted) {
+        setState(() {}); // Refresh the list
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Removed from favorites'),

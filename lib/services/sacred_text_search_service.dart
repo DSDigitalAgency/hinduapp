@@ -3,6 +3,7 @@ import '../models/sacred_text_model.dart';
 import 'language_conversion_service.dart';
 import 'api_service.dart';
 import 'logger_service.dart';
+import 'local_storage_service.dart';
 
 class SacredTextSearchService {
   static const int _maxResults = 20;
@@ -17,6 +18,7 @@ class SacredTextSearchService {
   static const Set<String> _availableLanguages = {
     'Devanagari (Hindi)',
     'Roman itrans (English)',
+    'itrans (English)', // Also support the shorter name
     'Malayalam',
     'Tamil',
     'Telugu',
@@ -25,7 +27,17 @@ class SacredTextSearchService {
 
   // Helper method to check if language has direct content available
   static bool _hasDirectContent(String language) {
-    return _availableLanguages.contains(language);
+    // Normalize language name to handle variations
+    final normalizedLanguage = language.trim();
+    if (_availableLanguages.contains(normalizedLanguage)) {
+      return true;
+    }
+    // Also check if it's a variation of "itrans (English)"
+    if (normalizedLanguage.toLowerCase().contains('itrans') && 
+        normalizedLanguage.toLowerCase().contains('english')) {
+      return true;
+    }
+    return false;
   }
 
   /// Get random sacred texts with language conversion
@@ -34,8 +46,21 @@ class SacredTextSearchService {
     int limit = 10,
   }) async {
     try {
-      // Use ApiService for authenticated requests
-      final response = await _apiService.getRandomSacredTexts(count: limit);
+      // Determine API language code based on whether it's a native language
+      String? apiLanguageCode;
+      if (userPreferredLanguage != null && _hasDirectContent(userPreferredLanguage)) {
+        // Native language: request content in that language from API
+        apiLanguageCode = LanguageConversionService.getLanguageCode(userPreferredLanguage);
+      } else {
+        // Non-native language: request Devanagari (will be converted later)
+        apiLanguageCode = 'hi';
+      }
+      
+      // Use ApiService for authenticated requests with language parameter
+      final response = await _apiService.getRandomSacredTexts(
+        count: limit,
+        language: apiLanguageCode,
+      );
 
       final List<dynamic> data = response['results'] ?? [];
       final List<SacredTextModel> sacredTexts = [];
@@ -44,25 +69,27 @@ class SacredTextSearchService {
         try {
           final sacredText = SacredTextModel.fromJson(item);
           
-        // Skip conversion if language has direct content available from API
-        if (userPreferredLanguage != null && _hasDirectContent(userPreferredLanguage)) {
-          sacredTexts.add(sacredText);
-        } else if (userPreferredLanguage != null && 
-            LanguageConversionService.needsConversion(userPreferredLanguage)) {
-          
-          try {
-            final convertedSacredText = await _convertSacredTextContent(
-              sacredText: sacredText,
-              targetLanguage: userPreferredLanguage,
-            );
-            sacredTexts.add(convertedSacredText);
-          } catch (e) {
-            // If conversion fails, add original text
+          // For 6 native languages: use directly (API should return in that language)
+          // For all other languages: always convert from Devanagari
+          if (userPreferredLanguage != null && _hasDirectContent(userPreferredLanguage)) {
+            // Native language: use directly (API already returned in correct language)
+            sacredTexts.add(sacredText);
+          } else if (userPreferredLanguage != null) {
+            // Non-native language: always convert from Devanagari
+            try {
+              final convertedSacredText = await _convertSacredTextContent(
+                sacredText: sacredText,
+                targetLanguage: userPreferredLanguage,
+              );
+              sacredTexts.add(convertedSacredText);
+            } catch (e) {
+              // If conversion fails, add original text
+              sacredTexts.add(sacredText);
+            }
+          } else {
+            // No language preference: use as-is
             sacredTexts.add(sacredText);
           }
-        } else {
-          sacredTexts.add(sacredText);
-        }
         } catch (e) {
           continue; // Skip invalid items
         }
@@ -113,11 +140,18 @@ class SacredTextSearchService {
 
       // Language handling - use direct content for 6 languages, Devanagari + conversion for others
       if (userPreferredLanguage != null) {
-        if (_hasDirectContent(userPreferredLanguage)) {
+        // Normalize language name for itrans variations
+        String normalizedLanguage = userPreferredLanguage.trim();
+        if (normalizedLanguage.toLowerCase().contains('itrans') && 
+            normalizedLanguage.toLowerCase().contains('english')) {
+          normalizedLanguage = 'Roman itrans (English)';
+        }
+        
+        if (_hasDirectContent(normalizedLanguage)) {
           // For the 6 languages, search directly in that language
-          final languageCode = LanguageConversionService.getLanguageCode(userPreferredLanguage);
+          final languageCode = LanguageConversionService.getLanguageCode(normalizedLanguage);
           queryParams['language'] = languageCode;
-          logger.debug('🔍 Sacred Text Search: Requesting direct content in language: $languageCode');
+          logger.debug('🔍 Sacred Text Search: Requesting direct content in language: $languageCode (normalized from: $userPreferredLanguage)');
         } else {
           // For other languages, search in Devanagari for conversion
           queryParams['language'] = 'hi';
@@ -133,7 +167,7 @@ class SacredTextSearchService {
         // Use ApiService for authenticated requests
         logger.debug('🔍 Sacred Text Search: Starting search with params: $queryParams');
         response = await _apiService.searchSacredTexts(queryParams);
-        logger.debug('🔍 Sacred Text Search: Search completed successfully');
+        logger.debug('🔍 Sacred Text Search: Search completed successfully. Response keys: ${response.keys.toList()}');
               } catch (e) {
         logger.debug('🔍 Sacred Text Search: Search failed with error: $e');
         
@@ -154,8 +188,15 @@ class SacredTextSearchService {
           
           // Keep language filter - use same logic as main request
           if (userPreferredLanguage != null) {
-            if (_hasDirectContent(userPreferredLanguage)) {
-              final languageCode = LanguageConversionService.getLanguageCode(userPreferredLanguage);
+            // Normalize language name for itrans variations
+            String normalizedLanguage = userPreferredLanguage.trim();
+            if (normalizedLanguage.toLowerCase().contains('itrans') && 
+                normalizedLanguage.toLowerCase().contains('english')) {
+              normalizedLanguage = 'Roman itrans (English)';
+            }
+            
+            if (_hasDirectContent(normalizedLanguage)) {
+              final languageCode = LanguageConversionService.getLanguageCode(normalizedLanguage);
               simplifiedParams['language'] = languageCode;
             } else {
               simplifiedParams['language'] = 'hi'; // Devanagari code
@@ -187,8 +228,42 @@ class SacredTextSearchService {
       }
 
       logger.debug('🔍 Sacred Text Search: Processing response - keys: ${response.keys.toList()}');
-      final List<dynamic> data = response['results'] ?? [];
+      
+      // Handle multiple possible response formats (similar to random texts and biography search)
+      List<dynamic> data = [];
+      if (response.containsKey('results') && response['results'] is List) {
+        data = response['results'] as List<dynamic>;
+      } else if (response.containsKey('data') && response['data'] is List) {
+        data = response['data'] as List<dynamic>;
+      } else if (response.containsKey('stotras') && response['stotras'] is List) {
+        // API might return 'stotras' key
+        data = response['stotras'] as List<dynamic>;
+      } else if (response.containsKey('sacredTexts') && response['sacredTexts'] is List) {
+        // API might return 'sacredTexts' key
+        data = response['sacredTexts'] as List<dynamic>;
+      } else if (response is List) {
+        data = response as List<dynamic>;
+      } else if (response.containsKey('results') && response['results'] != null) {
+        // Try to handle if results is not a list
+        final results = response['results'];
+        if (results is List) {
+          data = results;
+        }
+      }
+      
       logger.debug('🔍 Sacred Text Search: Found ${data.length} items in response');
+      
+      // If no data found, log the full response for debugging
+      if (data.isEmpty) {
+        logger.debug('🔍 Sacred Text Search: No data found in response. Full response: $response');
+        // Check if there's an error message in the response
+        if (response.containsKey('message')) {
+          logger.debug('🔍 Sacred Text Search: API message: ${response['message']}');
+        }
+        if (response.containsKey('error')) {
+          logger.debug('🔍 Sacred Text Search: API error: ${response['error']}');
+        }
+      }
       
       final List<SacredTextModel> sacredTexts = [];
 
@@ -221,58 +296,116 @@ class SacredTextSearchService {
       // Clear raw data to free memory
       data.clear();
 
-      // Skip conversion for direct content languages, convert for others
-      if (userPreferredLanguage != null && _hasDirectContent(userPreferredLanguage)) {
-        // No conversion needed - content is already in the correct language
+      // Normalize language name for itrans variations
+      String? normalizedLanguage = userPreferredLanguage;
+      if (userPreferredLanguage != null) {
+        final trimmed = userPreferredLanguage.trim();
+        if (trimmed.toLowerCase().contains('itrans') && 
+            trimmed.toLowerCase().contains('english')) {
+          normalizedLanguage = 'Roman itrans (English)';
+        }
+      }
+
+      // Check what language the API actually returned and convert if needed
+      bool needsConversion = false;
+      if (normalizedLanguage != null && sacredTexts.isNotEmpty) {
+        // For non-native languages: always convert (we always request Devanagari for them)
+        // For native languages: only convert if API returned wrong language
+        final isNativeLanguage = _hasDirectContent(normalizedLanguage);
+        
+        if (!isNativeLanguage) {
+          // Non-native language: always convert from Devanagari
+          needsConversion = true;
+          logger.debug('🔍 Sacred Text Search: Non-native language $normalizedLanguage - always converting from Devanagari');
+        } else {
+          // Native language: check if API returned matching language
+          final firstResult = sacredTexts[0];
+          final apiReturnedLanguage = firstResult.languageUsed ?? '';
+          final apiLanguageCode = apiReturnedLanguage.toLowerCase();
+          final apiLanguageName = LocalStorageService.getLanguageNameFromCode(apiReturnedLanguage) ?? apiReturnedLanguage;
+          
+          final userLangLower = normalizedLanguage.toLowerCase();
+          final apiLangLower = apiLanguageName.toLowerCase();
+          
+          bool apiMatchesUserLanguage = false;
+          // For direct content languages, check if API returned matching language
+          if (apiLanguageCode == 'en' && userLangLower.contains('itrans')) {
+            apiMatchesUserLanguage = true;
+          } else if (apiLangLower.contains(userLangLower) || 
+                     userLangLower.contains(apiLangLower)) {
+            apiMatchesUserLanguage = true;
+          } else if (apiLanguageCode == 'hi' && !userLangLower.contains('devanagari') && !userLangLower.contains('hindi')) {
+            // API returned Devanagari but user wants a different native language
+            apiMatchesUserLanguage = false;
+          }
+          
+          needsConversion = !apiMatchesUserLanguage;
+          logger.debug('🔍 Sacred Text Search: Native language $normalizedLanguage - API returned: $apiLanguageName ($apiReturnedLanguage), Needs conversion: $needsConversion');
+        }
+      }
+
+      // Convert if needed
+      if (needsConversion && normalizedLanguage != null) {
+        // Always try to convert if API returned wrong language, even for "native" languages
+        // because the API might have returned Devanagari when we requested English/itrans
+        logger.debug('🔍 Sacred Text Search: Converting content to $normalizedLanguage');
+        try {
+          final convertedTexts = await _convertSacredTextsBatchTitlesOnly(
+            sacredTexts: sacredTexts,
+            targetLanguage: normalizedLanguage,
+          );
+          
+          // Clear original list and add converted items
+          sacredTexts.clear();
+          sacredTexts.addAll(convertedTexts);
+          
+          // Clear converted list to free memory
+          convertedTexts.clear();
+        } catch (e) {
+          logger.debug('🔍 Sacred Text Search: Conversion failed: $e');
+          // If conversion fails, keep original content
+        }
+      } else if (!needsConversion && normalizedLanguage != null) {
+        // No conversion needed - API returned content in the correct language
         logger.debug('🔍 Sacred Text Search: Using direct content, no conversion needed');
-      } else if (userPreferredLanguage != null && 
-          LanguageConversionService.needsConversion(userPreferredLanguage)) {
-        
-        logger.debug('🔍 Sacred Text Search: Converting content to $userPreferredLanguage');
-        final convertedTexts = await _convertSacredTextsBatchTitlesOnly(
-          sacredTexts: sacredTexts,
-          targetLanguage: userPreferredLanguage,
-        );
-        
-        // Clear original list and add converted items
-        sacredTexts.clear();
-        sacredTexts.addAll(convertedTexts);
-        
-        // Clear converted list to free memory
-        convertedTexts.clear();
-      } else {
         
         // Fix language field mapping for native languages
         for (int i = 0; i < sacredTexts.length; i++) {
           final sacredText = sacredTexts[i];
-          if (sacredText.languageUsed == 'Itrans' && userPreferredLanguage == 'English') {
-            // Create new model with corrected language field
-            final correctedModel = SacredTextModel(
-              sacredTextId: sacredText.sacredTextId,
-              title: sacredText.title,
-              excerpt: sacredText.excerpt,
-              text: sacredText.text,
-              languageUsed: 'English', // Fix the language field
-              category: sacredText.category,
-              tags: sacredText.tags,
-              isConverted: false,
-              originalLanguage: sacredText.languageUsed,
-            );
-            sacredTexts[i] = correctedModel;
-          } else if (sacredText.languageUsed == 'Devanagari' && userPreferredLanguage == 'Devanagari (Hindi)') {
-            // Create new model with corrected language field
-            final correctedModel = SacredTextModel(
-              sacredTextId: sacredText.sacredTextId,
-              title: sacredText.title,
-              excerpt: sacredText.excerpt,
-              text: sacredText.text,
-              languageUsed: 'Devanagari (Hindi)', // Fix the language field
-              category: sacredText.category,
-              tags: sacredText.tags,
-              isConverted: false,
-              originalLanguage: sacredText.languageUsed,
-            );
-            sacredTexts[i] = correctedModel;
+          final apiLang = (sacredText.languageUsed ?? '').toLowerCase();
+          if (apiLang == 'en' || apiLang == 'itrans') {
+            if (normalizedLanguage.toLowerCase().contains('itrans')) {
+              // Create new model with corrected language field
+              final correctedModel = SacredTextModel(
+                sacredTextId: sacredText.sacredTextId,
+                title: sacredText.title,
+                excerpt: sacredText.excerpt,
+                text: sacredText.text,
+                languageUsed: normalizedLanguage,
+                category: sacredText.category,
+                tags: sacredText.tags,
+                isConverted: false,
+                originalLanguage: sacredText.languageUsed,
+              );
+              sacredTexts[i] = correctedModel;
+            }
+          } else if (apiLang == 'hi' || apiLang == 'devanagari') {
+            if (normalizedLanguage.toLowerCase().contains('devanagari') || 
+                normalizedLanguage.toLowerCase().contains('hindi')) {
+              // Create new model with corrected language field
+              final correctedModel = SacredTextModel(
+                sacredTextId: sacredText.sacredTextId,
+                title: sacredText.title,
+                excerpt: sacredText.excerpt,
+                text: sacredText.text,
+                languageUsed: normalizedLanguage,
+                category: sacredText.category,
+                tags: sacredText.tags,
+                isConverted: false,
+                originalLanguage: sacredText.languageUsed,
+              );
+              sacredTexts[i] = correctedModel;
+            }
           }
         }
       }

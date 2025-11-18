@@ -20,7 +20,7 @@ class VideoPlayerScreen extends StatefulWidget {
 }
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
-  late YoutubePlayerController _controller;
+  YoutubePlayerController? _controller;
   WebViewController? _webViewController;
   final FavoritesService _favoritesService = FavoritesService();
   bool _isLoading = true;
@@ -51,7 +51,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     
     _category = widget.video.category;
     _language = widget.video.language;
-    _initializeYouTubePlayer();
+    
+    // Use WebView as primary method to avoid error 153 issues
+    // YouTube iframe player often fails with error 153 (embedding disabled)
+    _initializeWebViewFallback();
     _checkFavoriteStatus();
     _fetchVideoDetails();
   }
@@ -68,7 +71,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         systemNavigationBarIconBrightness: Brightness.dark,
       ),
     );
-    _controller.close();
+    try {
+      _controller?.close();
+    } catch (e) {
+      // Ignore if already closed
+    }
     super.dispose();
   }
 
@@ -87,7 +94,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
-  void _initializeYouTubePlayer() {
+  // YouTube player initialization removed - using WebView as primary method to avoid error 153
+
+  void _initializeWebViewFallback() {
     if (widget.video.youtubeId == null || widget.video.youtubeId!.isEmpty) {
       setState(() {
         _isLoading = false;
@@ -95,53 +104,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       });
       return;
     }
-
+    
+    // Close the YouTube player controller if it exists
     try {
-      _controller = YoutubePlayerController.fromVideoId(
-        videoId: widget.video.youtubeId!,
-        autoPlay: false,
-        params: const YoutubePlayerParams(
-          showControls: true,
-          showFullscreenButton: true,
-          mute: false,
-          loop: false,
-        ),
-      );
-
-      // Listen for player state changes to handle errors
-      _controller.listen((value) {
-        if (mounted) {
-          // Check if player encountered an error
-          if (value.hasError) {
-            // Try WebView fallback instead of showing error immediately
-            _initializeWebViewFallback();
-          } else if (value.playerState == PlayerState.playing || value.playerState == PlayerState.buffering) {
-            if (_isLoading) {
-              setState(() {
-                _isLoading = false;
-                _hasError = false;
-              });
-            }
-          }
-        }
-      });
-
-      // Set initial state
-      setState(() {
-        _isLoading = false;
-        _hasError = false;
-      });
-      
+      _controller?.close();
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
-      });
+      // Ignore if already closed or not initialized
     }
-  }
-
-  void _initializeWebViewFallback() {
-    if (widget.video.youtubeId == null || _useWebViewFallback) return;
     
     setState(() {
       _useWebViewFallback = true;
@@ -149,17 +118,50 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       _hasError = false;
     });
 
+    // For error 15 (embedding blocked), try WebView first, but show clear error if it fails
+    // The error screen will have a prominent button to open in YouTube app
+    _initializeWebViewPlayer();
+  }
+
+  Future<bool> _tryOpenInYouTubeApp() async {
+    try {
+      final success = await YouTubeService.openYouTubeVideo(widget.video.youtubeId!);
+      if (success && mounted) {
+        // If successfully opened in YouTube app, navigate back after a delay
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+        });
+        return true;
+      }
+    } catch (e) {
+      // YouTube app not available, continue with WebView
+    }
+    return false;
+  }
+
+  void _initializeWebViewPlayer() {
     try {
       _webViewController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0x00000000))
+        ..setUserAgent('Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36')
         ..setNavigationDelegate(
           NavigationDelegate(
             onProgress: (int progress) {
-              // Update loading state
+              if (mounted && progress == 100) {
+                setState(() {
+                  _isLoading = false;
+                });
+              }
             },
             onPageStarted: (String url) {
-              // Page started loading
+              if (mounted) {
+                setState(() {
+                  _isLoading = true;
+                });
+              }
             },
             onPageFinished: (String url) {
               if (mounted) {
@@ -170,24 +172,160 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             },
             onWebResourceError: (WebResourceError error) {
               if (mounted) {
-                setState(() {
-                  _hasError = true;
-                  _isLoading = false;
-                });
+                // Log error for debugging
+                print('WebView error: ${error.description} (${error.errorCode})');
+                
+                // Check if error message contains "error 15" or embedding-related errors
+                final errorDesc = error.description.toLowerCase();
+                if (errorDesc.contains('error 15') || 
+                    errorDesc.contains('embedding') ||
+                    errorDesc.contains('blocked') ||
+                    error.errorCode == -2) {
+                  // Error 15 or embedding blocked - automatically open in YouTube app
+                  _openYouTubeVideo();
+                  // Close this screen after opening YouTube
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  });
+                } else {
+                  // Other errors - show error screen
+                  setState(() {
+                    _hasError = true;
+                    _isLoading = false;
+                  });
+                }
               }
+            },
+            onNavigationRequest: (NavigationRequest request) {
+              // Allow YouTube embeds and related resources
+              final url = request.url.toLowerCase();
+              if (url.contains('youtube.com') || 
+                  url.contains('youtube-nocookie.com') ||
+                  url.contains('google.com') ||
+                  url.contains('gstatic.com') ||
+                  url.contains('googlevideo.com')) {
+                return NavigationDecision.navigate;
+              }
+              // Block other navigation attempts
+              return NavigationDecision.prevent;
             },
           ),
         );
 
-      // Load YouTube embed URL
-      final embedUrl = 'https://www.youtube.com/embed/${widget.video.youtubeId!}?autoplay=0&modestbranding=1&rel=0&showinfo=0';
-      _webViewController!.loadRequest(Uri.parse(embedUrl));
+      // Try youtube-nocookie.com first (more permissive), then fallback to regular youtube.com
+      // Use HTML wrapper with iframe for better compatibility
+      // Add JavaScript to detect error 15 and notify Flutter
+      final htmlContent = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .error-message {
+            color: white;
+            text-align: center;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div class="video-container">
+        <iframe 
+            id="ytplayer"
+            src="https://www.youtube-nocookie.com/embed/${widget.video.youtubeId!}?autoplay=0&modestbranding=1&rel=0&showinfo=0&enablejsapi=1&playsinline=1&origin=https://hinduconnect.app&iv_load_policy=3"
+            frameborder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen
+            onload="checkForErrors()">
+        </iframe>
+    </div>
+    <script>
+        function checkForErrors() {
+            // Check for error 15 or embedding issues after a delay
+            setTimeout(function() {
+                var iframe = document.getElementById('ytplayer');
+                try {
+                    // Try to access iframe content (will fail if cross-origin, but that's OK)
+                    var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    var bodyText = iframeDoc.body.innerText || iframeDoc.body.textContent || '';
+                    
+                    // Check for error messages
+                    if (bodyText.includes('error 15') || 
+                        bodyText.includes('embedding') || 
+                        bodyText.includes('blocked') ||
+                        bodyText.includes('not available')) {
+                        // Notify Flutter about error
+                        if (window.flutter_inappwebview) {
+                            window.flutter_inappwebview.callHandler('onError15');
+                        }
+                    }
+                } catch(e) {
+                    // Cross-origin error is expected, ignore
+                }
+            }, 2000);
+        }
+        
+        // Also listen for iframe load errors
+        window.addEventListener('error', function(e) {
+            if (e.message && (e.message.includes('error 15') || e.message.includes('embedding'))) {
+                if (window.flutter_inappwebview) {
+                    window.flutter_inappwebview.callHandler('onError15');
+                }
+            }
+        }, true);
+    </script>
+</body>
+</html>
+      ''';
+      
+      _webViewController!.loadHtmlString(htmlContent, baseUrl: 'https://www.youtube-nocookie.com');
+      
+      // Set up a longer timeout to detect error 15 (videos that can't be embedded often show error after a few seconds)
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted && _isLoading && !_hasError) {
+          // If still loading after 5 seconds without error, might be error 15
+          // Show error screen with option to open in YouTube
+          setState(() {
+            _hasError = true;
+            _isLoading = false;
+          });
+        }
+      });
       
     } catch (e) {
-      setState(() {
-        _hasError = true;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -230,13 +368,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               width: double.infinity,
               child: Stack(
                 children: [
-                  if (!_hasError && widget.video.youtubeId != null)
+                  if (!_hasError && widget.video.youtubeId != null && _webViewController != null)
                     SizedBox(
                       width: double.infinity,
                       height: double.infinity,
-                      child: _useWebViewFallback && _webViewController != null
-                          ? WebViewWidget(controller: _webViewController!)
-                          : YoutubePlayer(controller: _controller),
+                      child: WebViewWidget(controller: _webViewController!),
                     ),
                   
                   if (_isLoading)
@@ -265,7 +401,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                               ),
                               const SizedBox(height: 16),
                               const Text(
-                                'Video unavailable',
+                                'Video cannot be embedded',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 18,
@@ -274,7 +410,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                               ),
                               const SizedBox(height: 8),
                               const Text(
-                                'Unable to load video',
+                                'This video cannot be played here due to\nembedding restrictions. Please watch it\non YouTube instead.',
                                 style: TextStyle(
                                   color: Colors.white70,
                                   fontSize: 14,
@@ -427,7 +563,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     
     // Close existing controller if it exists
     try {
-      _controller.close();
+      _controller?.close();
     } catch (e) {
       // Ignore error if controller was already closed
     }
@@ -438,8 +574,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     // Add a small delay to ensure cleanup
     await Future.delayed(const Duration(milliseconds: 500));
     
-    // Try YouTube player first, will fallback to WebView if needed
-    _initializeYouTubePlayer();
+    // Retry with WebView
+    _initializeWebViewFallback();
   }
 
   Future<void> _openYouTubeVideo() async {
@@ -457,16 +593,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _checkFavoriteStatus() async {
-    // If user is not authenticated, don't check favorites
-    if (!_favoritesService.isUserAuthenticated) {
-      if (mounted) {
-        setState(() {
-          _isFavorite = false;
-        });
-      }
-      return;
-    }
-
+    // Favorites now work without authentication (using local storage)
     final videoId = widget.video.id.isNotEmpty
         ? widget.video.id
         : (widget.video.youtubeId ?? '');
@@ -491,20 +618,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _toggleFavorite() async {
-    // Check if user is authenticated first
-    if (!_favoritesService.isUserAuthenticated) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please sign in to add videos to favorites'),
-            backgroundColor: AppTheme.warningColor,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      return;
-    }
-
+    // Favorites now work without authentication (using local storage)
     final videoId = widget.video.id.isNotEmpty
         ? widget.video.id
         : (widget.video.youtubeId ?? '');

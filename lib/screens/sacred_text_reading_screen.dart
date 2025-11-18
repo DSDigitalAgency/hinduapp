@@ -13,6 +13,7 @@ import 'package:hindu_connect/services/font_service.dart';
 import 'package:hindu_connect/services/markdown_service.dart';
 import 'package:hindu_connect/services/api_service.dart';
 import 'package:hindu_connect/services/logger_service.dart';
+import 'package:hindu_connect/services/deep_link_service.dart';
 import 'package:hindu_connect/providers/language_provider.dart';
 import 'package:hindu_connect/providers/reading_settings_provider.dart';
 import 'package:hindu_connect/constants/app_theme.dart';
@@ -46,6 +47,7 @@ class _SacredTextReadingScreenState
   static const Set<String> _availableLanguages = {
     'Devanagari (Hindi)',
     'Roman itrans (English)',
+    'itrans (English)', // Also support the shorter name
     'Malayalam',
     'Tamil',
     'Telugu',
@@ -54,7 +56,27 @@ class _SacredTextReadingScreenState
 
   // Helper method to check if language has direct content available
   bool _hasDirectContent(String language) {
-    return _availableLanguages.contains(language);
+    // Normalize language name to handle variations
+    final normalizedLanguage = language.trim();
+    if (_availableLanguages.contains(normalizedLanguage)) {
+      return true;
+    }
+    // Also check if it's a variation of "itrans (English)"
+    if (normalizedLanguage.toLowerCase().contains('itrans') && 
+        normalizedLanguage.toLowerCase().contains('english')) {
+      return true;
+    }
+    return false;
+  }
+  
+  // Normalize language name for consistent handling
+  String _normalizeLanguage(String language) {
+    final normalized = language.trim();
+    if (normalized.toLowerCase().contains('itrans') && 
+        normalized.toLowerCase().contains('english')) {
+      return 'Roman itrans (English)';
+    }
+    return normalized;
   }
 
   // State variables
@@ -63,6 +85,7 @@ class _SacredTextReadingScreenState
   bool _isFavorite = false;
   String? _userPreferredLanguage;
   String? _convertedContent;
+  String? _convertedTitle;
   
   // Reading settings - now managed by global provider
 
@@ -112,63 +135,128 @@ class _SacredTextReadingScreenState
   }
 
   Future<void> _loadSacredTextData() async {
-    try {
-      // Get user's preferred language
-      final currentLanguage = ref.read(languageProvider);
-      _userPreferredLanguage = currentLanguage;
-      final languageCode = LocalStorageService.getLanguageCodeFromName(_userPreferredLanguage);
+    // Get user's preferred language
+    final currentLanguage = ref.read(languageProvider);
+    // Normalize language name to handle variations (e.g., "itrans (English)" -> "Roman itrans (English)")
+    final normalizedLanguage = _normalizeLanguage(currentLanguage);
+    _userPreferredLanguage = normalizedLanguage;
+    
+    // Determine API language code: For 6 native languages, use their code; for others, always use Devanagari
+    final bool isNativeLanguage = _hasDirectContent(normalizedLanguage);
+    final String apiLanguageCode = isNativeLanguage 
+        ? LanguageConversionService.getLanguageCode(normalizedLanguage)
+        : 'hi'; // Always use Devanagari for non-native languages
 
-      
-      // Try to get from widget.sacredText first (from search screen)
+    try {
+      // Try to get from widget.sacredText first (from search/home screen)
       if (widget.sacredText != null) {
 
         _sacredTextModel = SacredTextModel.fromJson(widget.sacredText!);
         
-        // Always check if we need to fetch full content
-        bool needsFullContent = false;
+        // Check if we have full content (>= 500 chars indicates full text, not just excerpt)
+        final hasFullContent = _sacredTextModel!.text != null && 
+            _sacredTextModel!.text!.isNotEmpty && 
+            _sacredTextModel!.text!.length >= 500;
         
-        // Check if we only have excerpt or if text field is empty
-        if (_sacredTextModel!.text == null || 
-            _sacredTextModel!.text!.isEmpty || 
-            _sacredTextModel!.text!.length < 500) { // If content is too short, likely just excerpt
-          needsFullContent = true;
-
+        // Check what language the content claims to be in
+        final searchResultLanguage = _sacredTextModel!.languageUsed ?? '';
+        // Handle both language codes and full language names
+        String searchResultLanguageName = searchResultLanguage;
+        if (searchResultLanguage.length <= 5 && !searchResultLanguage.contains(' ')) {
+          // Likely a language code, convert to name
+          searchResultLanguageName = LocalStorageService.getLanguageNameFromCode(searchResultLanguage) ?? searchResultLanguage;
         }
         
-        if (needsFullContent) {
-          // Fetch full content from API with language parameter
-          final apiService = ApiService();
-          final sacredTextData = await apiService.getSacredTextById(widget.sacredTextId, language: languageCode);
-          _sacredTextModel = SacredTextModel.fromJson(sacredTextData);
-          
-          // Cache the data
-          await _cacheService.cacheSacredText(widget.sacredTextId, sacredTextData);
+        // Normalize both for comparison
+        final searchLangLower = searchResultLanguageName.toLowerCase();
+        final userLangLower = normalizedLanguage.toLowerCase();
+        final isSearchResultInUserLanguage = searchLangLower.contains(userLangLower) ||
+            userLangLower.contains(searchLangLower) ||
+            (searchResultLanguage.toLowerCase() == 'en' && userLangLower.contains('itrans'));
+        
+        // For HOME SCREEN: If we have full converted content in the user's language, use it directly
+        // For SEARCH SCREEN: Search only converts excerpt, so we always need to fetch and convert full text
+        if (hasFullContent && isSearchResultInUserLanguage && _sacredTextModel!.isConverted == true) {
+          // Home screen: Full content already converted, use it directly
+          logger.debug('🔍 Sacred Text Reading: Using full converted content from home screen for $normalizedLanguage');
+          _convertedContent = _sacredTextModel!.text!;
+          // Title should already be converted in home screen data, use it directly
+          _convertedTitle = _sacredTextModel!.title;
+          return;
         }
         
-        // Convert the content (whether original or fetched) only if needed
+        // For all other cases (search screen, incomplete content, or wrong language), fetch full content and convert
+        logger.debug('🔍 Sacred Text Reading: Fetching full content and converting for $normalizedLanguage (hasFullContent: $hasFullContent, isInUserLanguage: $isSearchResultInUserLanguage, isConverted: ${_sacredTextModel!.isConverted})');
+        
+        // Fetch full content from API with correct language parameter
+        final apiService = ApiService();
+        final sacredTextData = await apiService.getSacredTextById(widget.sacredTextId, language: apiLanguageCode);
+        _sacredTextModel = SacredTextModel.fromJson(sacredTextData);
+        
+        // Cache the data
+        await _cacheService.cacheSacredText(widget.sacredTextId, sacredTextData);
+        
+        // Convert the fetched content
         if (_sacredTextModel!.text != null && _sacredTextModel!.text!.isNotEmpty) {
-
-
-
+          // Check what language the API actually returned
+          final apiReturnedLanguage = _sacredTextModel!.languageUsed ?? '';
+          String apiLanguageName = apiReturnedLanguage;
+          if (apiReturnedLanguage.length <= 5 && !apiReturnedLanguage.contains(' ')) {
+            // Likely a language code, convert to name
+            apiLanguageName = LocalStorageService.getLanguageNameFromCode(apiReturnedLanguage) ?? apiReturnedLanguage;
+          }
           
-      // Skip conversion if language has direct content available from API
-      if (_userPreferredLanguage != null && _hasDirectContent(_userPreferredLanguage!)) {
-        logger.debug('🔍 Sacred Text Reading: Using initial direct content for $_userPreferredLanguage');
-        logger.debug('🔍 Sacred Text Reading: Content preview: ${_sacredTextModel!.text!.substring(0, math.min(100, _sacredTextModel!.text!.length))}');
-        _convertedContent = _sacredTextModel!.text!;
-      } else {
-        logger.debug('🔍 Sacred Text Reading: Converting initial content to $_userPreferredLanguage');
-        // Only convert if needed
-        final converted = await _conversionService.convertSacredTextContent(
-          sacredTextId: widget.sacredTextId,
-          userLanguage: _userPreferredLanguage ?? 'Devanagari',
-          originalContent: _sacredTextModel!.text!,
-        );
-        _convertedContent = converted;
-      }
-
-        } else {
-
+          // For non-native languages: ALWAYS convert from Devanagari
+          // For native languages: use directly if API returned matching language
+          bool needsConversion = false;
+          if (!isNativeLanguage) {
+            // Non-native language: always convert
+            needsConversion = true;
+            logger.debug('🔍 Sacred Text Reading: Non-native language $normalizedLanguage - always converting from $apiLanguageName');
+          } else {
+            // Native language: check if API returned matching language
+            final apiLangLower = apiLanguageName.toLowerCase();
+            final apiMatchesUserLanguage = apiLangLower.contains(userLangLower) ||
+                userLangLower.contains(apiLangLower) ||
+                (apiReturnedLanguage.toLowerCase() == 'en' && userLangLower.contains('itrans'));
+            
+            needsConversion = !apiMatchesUserLanguage;
+            logger.debug('🔍 Sacred Text Reading: Native language $normalizedLanguage - API returned: $apiLanguageName, needsConversion: $needsConversion');
+          }
+          
+          if (needsConversion) {
+            logger.debug('🔍 Sacred Text Reading: Converting content from $apiLanguageName to $normalizedLanguage');
+            // Convert both title and content to user's preferred language
+            final convertedContent = await _conversionService.convertSacredTextContent(
+              sacredTextId: widget.sacredTextId,
+              userLanguage: normalizedLanguage,
+              originalContent: _sacredTextModel!.text!,
+            );
+            _convertedContent = convertedContent;
+            
+            // Convert title if available
+            if (_sacredTextModel!.title != null && _sacredTextModel!.title!.isNotEmpty) {
+              try {
+                final convertedTitle = await _conversionService.getConvertedTitleForSearch(
+                  title: _sacredTextModel!.title!,
+                  userLanguage: normalizedLanguage,
+                );
+                if (convertedTitle.isNotEmpty && convertedTitle != _sacredTextModel!.title) {
+                  _convertedTitle = convertedTitle;
+                } else {
+                  _convertedTitle = _sacredTextModel!.title;
+                }
+              } catch (e) {
+                _convertedTitle = _sacredTextModel!.title;
+              }
+            } else {
+              _convertedTitle = _sacredTextModel!.title;
+            }
+          } else {
+            logger.debug('🔍 Sacred Text Reading: Using direct content for $normalizedLanguage (API returned: $apiLanguageName)');
+            _convertedContent = _sacredTextModel!.text!;
+            _convertedTitle = _sacredTextModel!.title;
+          }
         }
         return;
       }
@@ -180,18 +268,65 @@ class _SacredTextReadingScreenState
         
         // Convert if needed
         if (_sacredTextModel!.text != null && _sacredTextModel!.text!.isNotEmpty) {
-          // Skip conversion if language has direct content available from API
-          if (_userPreferredLanguage != null && _hasDirectContent(_userPreferredLanguage!)) {
-            logger.debug('🔍 Sacred Text Reading: Using cached direct content for $_userPreferredLanguage');
-            _convertedContent = _sacredTextModel!.text!;
+          // Check what language the cached content is in
+          final cachedLanguage = _sacredTextModel!.languageUsed ?? '';
+          // Handle both language codes and full language names
+          String cachedLanguageName = cachedLanguage;
+          if (cachedLanguage.length <= 5 && !cachedLanguage.contains(' ')) {
+            // Likely a language code, convert to name
+            cachedLanguageName = LocalStorageService.getLanguageNameFromCode(cachedLanguage) ?? cachedLanguage;
+          }
+          
+          // For non-native languages: ALWAYS convert from Devanagari
+          // For native languages: use directly if cached content is in the user's preferred language
+          bool needsConversion = false;
+          if (!isNativeLanguage) {
+            // Non-native language: always convert
+            needsConversion = true;
+            logger.debug('🔍 Sacred Text Reading: Non-native language $normalizedLanguage - converting cached content from $cachedLanguageName');
           } else {
-            logger.debug('🔍 Sacred Text Reading: Converting cached content to $_userPreferredLanguage');
-            final converted = await _conversionService.convertSacredTextContent(
+            // Native language: check if cached content matches user's language
+            final cachedLangLower = cachedLanguageName.toLowerCase();
+            final userLangLower = normalizedLanguage.toLowerCase();
+            final cachedMatchesUserLanguage = cachedLangLower.contains(userLangLower) ||
+                userLangLower.contains(cachedLangLower) ||
+                (cachedLanguage.toLowerCase() == 'en' && userLangLower.contains('itrans'));
+            
+            needsConversion = !cachedMatchesUserLanguage;
+            logger.debug('🔍 Sacred Text Reading: Native language $normalizedLanguage - cached: $cachedLanguageName, needsConversion: $needsConversion');
+          }
+          
+          if (needsConversion) {
+            logger.debug('🔍 Sacred Text Reading: Converting cached content from $cachedLanguageName to $normalizedLanguage');
+            final convertedContent = await _conversionService.convertSacredTextContent(
               sacredTextId: widget.sacredTextId,
-              userLanguage: _userPreferredLanguage ?? 'Devanagari',
+              userLanguage: normalizedLanguage,
               originalContent: _sacredTextModel!.text!,
             );
-            _convertedContent = converted;
+            _convertedContent = convertedContent;
+            
+            // Convert title if available
+            if (_sacredTextModel!.title != null && _sacredTextModel!.title!.isNotEmpty) {
+              try {
+                final convertedTitle = await _conversionService.getConvertedTitleForSearch(
+                  title: _sacredTextModel!.title!,
+                  userLanguage: normalizedLanguage,
+                );
+                if (convertedTitle.isNotEmpty && convertedTitle != _sacredTextModel!.title) {
+                  _convertedTitle = convertedTitle;
+                } else {
+                  _convertedTitle = _sacredTextModel!.title;
+                }
+              } catch (e) {
+                _convertedTitle = _sacredTextModel!.title;
+              }
+            } else {
+              _convertedTitle = _sacredTextModel!.title;
+            }
+          } else {
+            logger.debug('🔍 Sacred Text Reading: Using cached direct content for $normalizedLanguage (cached: $cachedLanguageName)');
+            _convertedContent = _sacredTextModel!.text!;
+            _convertedTitle = _sacredTextModel!.title;
           }
         }
         return;
@@ -202,28 +337,51 @@ class _SacredTextReadingScreenState
       
     // Fetch from API as last resort  
     try {
-      final languageCode = LocalStorageService.getLanguageCodeFromName(_userPreferredLanguage);
-      logger.debug('🔍 Sacred Text Reading: Requesting content with language: $_userPreferredLanguage (code: $languageCode)');
+      logger.debug('🔍 Sacred Text Reading: Requesting content with language: $normalizedLanguage (code: $apiLanguageCode, isNative: $isNativeLanguage)');
       final apiService = ApiService();
-      final sacredTextData = await apiService.getSacredTextById(widget.sacredTextId, language: languageCode);
+      final sacredTextData = await apiService.getSacredTextById(widget.sacredTextId, language: apiLanguageCode);
       _sacredTextModel = SacredTextModel.fromJson(sacredTextData);
       
       logger.debug('🔍 Sacred Text Reading: API returned content length: ${_sacredTextModel!.text?.length ?? 0}');
       
-      // If no content and we requested direct language, try Devanagari as fallback
-      if ((_sacredTextModel!.text == null || _sacredTextModel!.text!.isEmpty) && 
-          _userPreferredLanguage != null && _hasDirectContent(_userPreferredLanguage!)) {
-        logger.debug('🔍 Sacred Text Reading: No direct content, trying Devanagari fallback');
+      // If no content and we requested a native language, try Devanagari as fallback
+      if ((_sacredTextModel!.text == null || _sacredTextModel!.text!.isEmpty) && isNativeLanguage) {
+        logger.debug('🔍 Sacred Text Reading: No content in requested native language, trying Devanagari fallback');
         
         try {
           final fallbackData = await apiService.getSacredTextById(widget.sacredTextId, language: 'hi');
           final fallbackModel = SacredTextModel.fromJson(fallbackData);
           
           if (fallbackModel.text != null && fallbackModel.text!.isNotEmpty) {
-            logger.debug('🔍 Sacred Text Reading: Fallback found Devanagari content, showing directly without conversion');
             _sacredTextModel = fallbackModel;
-            // For direct content languages, show Devanagari directly instead of converting
-            _convertedContent = _sacredTextModel!.text!;
+            
+            // Convert from Devanagari to user's preferred language
+            logger.debug('🔍 Sacred Text Reading: Fallback found Devanagari content, converting to $normalizedLanguage');
+            final convertedContent = await _conversionService.convertSacredTextContent(
+              sacredTextId: widget.sacredTextId,
+              userLanguage: normalizedLanguage,
+              originalContent: _sacredTextModel!.text!,
+            );
+            _convertedContent = convertedContent;
+            
+            // Convert title if available
+            if (_sacredTextModel!.title != null && _sacredTextModel!.title!.isNotEmpty) {
+              try {
+                final convertedTitle = await _conversionService.getConvertedTitleForSearch(
+                  title: _sacredTextModel!.title!,
+                  userLanguage: normalizedLanguage,
+                );
+                if (convertedTitle.isNotEmpty && convertedTitle != _sacredTextModel!.title) {
+                  _convertedTitle = convertedTitle;
+                } else {
+                  _convertedTitle = _sacredTextModel!.title;
+                }
+              } catch (e) {
+                _convertedTitle = _sacredTextModel!.title;
+              }
+            } else {
+              _convertedTitle = _sacredTextModel!.title;
+            }
             
             // Cache the fallback data
             await _cacheService.cacheSacredText(widget.sacredTextId, fallbackData);
@@ -239,21 +397,68 @@ class _SacredTextReadingScreenState
       
       // Convert if needed
       if (_sacredTextModel!.text != null && _sacredTextModel!.text!.isNotEmpty) {
-      // Skip conversion if language has direct content available from API
-      if (_userPreferredLanguage != null && _hasDirectContent(_userPreferredLanguage!)) {
-        logger.debug('🔍 Sacred Text Reading: Using direct content for $_userPreferredLanguage');
-        logger.debug('🔍 Sacred Text Reading: API content preview: ${_sacredTextModel!.text!.substring(0, math.min(100, _sacredTextModel!.text!.length))}');
-        _convertedContent = _sacredTextModel!.text!;
-      } else {
-        logger.debug('🔍 Sacred Text Reading: Converting content to $_userPreferredLanguage');
-        final converted = await _conversionService.convertSacredTextContent(
-          sacredTextId: widget.sacredTextId,
-          userLanguage: _userPreferredLanguage ?? 'Devanagari',
-          originalContent: _sacredTextModel!.text!,
-        );
-        _convertedContent = converted;
-      }
+        // Check what language the API actually returned
+        final apiReturnedLanguage = _sacredTextModel!.languageUsed ?? '';
+        // Handle both language codes and full language names
+        String apiLanguageName = apiReturnedLanguage;
+        if (apiReturnedLanguage.length <= 5 && !apiReturnedLanguage.contains(' ')) {
+          // Likely a language code, convert to name
+          apiLanguageName = LocalStorageService.getLanguageNameFromCode(apiReturnedLanguage) ?? apiReturnedLanguage;
         }
+        
+        // For non-native languages: ALWAYS convert from Devanagari
+        // For native languages: use directly if API returned matching language
+        bool needsConversion = false;
+        if (!isNativeLanguage) {
+          // Non-native language: always convert
+          needsConversion = true;
+          logger.debug('🔍 Sacred Text Reading: Non-native language $normalizedLanguage - always converting from $apiLanguageName');
+        } else {
+          // Native language: check if API returned matching language
+          final apiLangLower = apiLanguageName.toLowerCase();
+          final userLangLower = normalizedLanguage.toLowerCase();
+          final apiMatchesUserLanguage = apiLangLower.contains(userLangLower) ||
+              userLangLower.contains(apiLangLower) ||
+              (apiReturnedLanguage.toLowerCase() == 'en' && userLangLower.contains('itrans'));
+          
+          needsConversion = !apiMatchesUserLanguage;
+          logger.debug('🔍 Sacred Text Reading: Native language $normalizedLanguage - API returned: $apiLanguageName, needsConversion: $needsConversion');
+        }
+        
+        if (needsConversion) {
+          // Convert to user's preferred language (from Devanagari for non-native, or from wrong language for native)
+          logger.debug('🔍 Sacred Text Reading: Converting content from $apiLanguageName to $normalizedLanguage');
+          final convertedContent = await _conversionService.convertSacredTextContent(
+            sacredTextId: widget.sacredTextId,
+            userLanguage: normalizedLanguage,
+            originalContent: _sacredTextModel!.text!,
+          );
+          _convertedContent = convertedContent;
+          
+          // Convert title if available
+          if (_sacredTextModel!.title != null && _sacredTextModel!.title!.isNotEmpty) {
+            try {
+              final convertedTitle = await _conversionService.getConvertedTitleForSearch(
+                title: _sacredTextModel!.title!,
+                userLanguage: normalizedLanguage,
+              );
+              if (convertedTitle.isNotEmpty && convertedTitle != _sacredTextModel!.title) {
+                _convertedTitle = convertedTitle;
+              } else {
+                _convertedTitle = _sacredTextModel!.title;
+              }
+            } catch (e) {
+              _convertedTitle = _sacredTextModel!.title;
+            }
+          } else {
+            _convertedTitle = _sacredTextModel!.title;
+          }
+        } else {
+          logger.debug('🔍 Sacred Text Reading: Using direct content for $normalizedLanguage (API returned: $apiLanguageName)');
+          _convertedContent = _sacredTextModel!.text!;
+          _convertedTitle = _sacredTextModel!.title;
+        }
+      }
     } catch (e) {
       // Handle error silently - API call failed
     }
@@ -300,6 +505,8 @@ class _SacredTextReadingScreenState
   Future<void> _shareContent() async {
     try {
       final content = _getSacredTextContent();
+      final title = _getSacredTextTitle();
+      final sacredTextId = widget.sacredTextId;
       
       // Create preview for sharing (first 200 characters)
       String sharePreview = content;
@@ -307,12 +514,12 @@ class _SacredTextReadingScreenState
         sharePreview = '${sharePreview.substring(0, 200)}...';
       }
 
-      final shareText = '''
-$sharePreview
-
-Read more in Hindu Connect App:
-https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
-''';
+      final shareText = DeepLinkService.generateShareText(
+        preview: sharePreview,
+        type: 'sacredtext',
+        id: sacredTextId,
+        title: title,
+      );
       
       await SharePlus.instance.share(ShareParams(text: shareText));
     } catch (e) {
@@ -321,6 +528,10 @@ https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
   }
 
   String _getSacredTextTitle() {
+    // Use converted title if available, otherwise use original
+    if (_convertedTitle != null && _convertedTitle!.isNotEmpty) {
+      return _convertedTitle!;
+    }
     if (_sacredTextModel != null) {
       return _sacredTextModel!.title ?? 'Sacred Text';
     }
@@ -506,6 +717,42 @@ https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
                       );
                     },
                   ),
+                  
+                  // Highlights/Tags section (similar to temples)
+                  if (_sacredTextModel?.displayHighlights != null && _sacredTextModel!.displayHighlights.isNotEmpty) ...[
+                    const SizedBox(height: AppTheme.spacingXXL),
+                    Consumer(
+                      builder: (context, ref, child) {
+                        final readingSettings = ref.watch(readingSettingsProvider);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Highlights:',
+                              style: TextStyle(
+                                fontSize: readingSettings.textSize + 2,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.primaryColor,
+                              ),
+                            ),
+                            const SizedBox(height: AppTheme.spacingM),
+                            Markdown(
+                              key: ValueKey('sacred_text_highlights_markdown_${readingSettings.textSize}_${readingSettings.backgroundColor.toARGB32()}_${readingSettings.textSpacing}'),
+                              data: _sacredTextModel!.displayHighlights.map((highlight) => '• $highlight').join('\n'),
+                              styleSheet: MarkdownService.createMarkdownStyleSheet(
+                                baseFontSize: readingSettings.textSize,
+                                textColor: ReadingSettingsWidget.getTextColor(readingSettings.backgroundColor),
+                                lineHeight: readingSettings.textSpacing,
+                                currentLanguage: _userPreferredLanguage,
+                              ),
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
                   
                   const SizedBox(height: AppTheme.spacingXXXL),
                   

@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:screen_protector/screen_protector.dart';
 import '../services/favorites_service.dart';
 import '../services/cache_service.dart';
 import '../services/markdown_service.dart';
 import '../services/local_storage_service.dart';
+import '../services/deep_link_service.dart';
 import '../models/biography_model.dart';
 import '../widgets/reading_settings_widget.dart';
 import '../providers/reading_settings_provider.dart';
@@ -50,9 +52,27 @@ class _BiographyReadingScreenState extends ConsumerState<BiographyReadingScreen>
   @override
   void initState() {
     super.initState();
-    _loadUserLanguagePreference();
-    _loadBiography();
-    // Reading settings handled by global provider
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      // Enable screen protection
+      await ScreenProtector.protectDataLeakageOn();
+      
+      _loadUserLanguagePreference();
+      _loadBiography();
+      // Reading settings handled by global provider
+    } catch (e) {
+      // Error in _init: $e
+    }
+  }
+
+  @override
+  void dispose() {
+    // Disable screen protection when leaving the screen
+    ScreenProtector.protectDataLeakageOff();
+    super.dispose();
   }
 
   Future<void> _loadUserLanguagePreference() async {
@@ -205,13 +225,16 @@ class _BiographyReadingScreenState extends ConsumerState<BiographyReadingScreen>
   Future<void> _shareContent() async {
     if (_biography == null) return;
 
-    final shareText =
-        '''
-${_biography!.displayContent.substring(0, _biography!.displayContent.length > 200 ? 200 : _biography!.displayContent.length)}...
+    final biographyId = widget.biographyId ?? _biography!.id ?? widget.title;
+    final content = _biography!.displayContent;
+    final preview = content.length > 200 ? '${content.substring(0, 200)}...' : content;
 
-Read more in Hindu Connect App:
-https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
-''';
+    final shareText = DeepLinkService.generateShareText(
+      preview: preview,
+      type: 'biography',
+      id: biographyId,
+      title: _biography!.title,
+    );
 
     await SharePlus.instance.share(ShareParams(text: shareText));
   }

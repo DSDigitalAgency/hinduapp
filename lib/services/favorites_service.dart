@@ -1,20 +1,15 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FavoritesService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  static const String _favoritesKey = 'favorites';
 
-  // Get current user ID
-  String? get currentUserId => _auth.currentUser?.uid;
+  /// Get SharedPreferences instance
+  Future<SharedPreferences> _getPrefs() async {
+    return await SharedPreferences.getInstance();
+  }
 
-  // Check if user is authenticated
-  bool get isUserAuthenticated => _auth.currentUser != null;
-
-  // Get current user email for debugging
-  String? get currentUserEmail => _auth.currentUser?.email;
-
-  // Add item to favorites
+  /// Add item to favorites
   Future<void> addToFavorites({
     required String itemId,
     required String itemType, // 'biography', 'temple', 'stotra', 'video', 'post'
@@ -22,97 +17,99 @@ class FavoritesService {
     String? description,
     String? imageUrl,
   }) async {
-    if (currentUserId == null) {
-      throw Exception('User not authenticated');
-    }
-
     try {
-      await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .collection('favorites')
-          .doc(itemId)
-          .set({
+      final prefs = await _getPrefs();
+      final favorites = await getAllFavorites();
+      
+      // Check if already favorited
+      if (favorites.any((fav) => fav['itemId'] == itemId)) {
+        return; // Already favorited
+      }
+
+      // Add new favorite
+      favorites.add({
         'itemId': itemId,
         'itemType': itemType,
         'title': title,
         'description': description ?? '',
         'imageUrl': imageUrl ?? '',
-        'addedAt': FieldValue.serverTimestamp(),
+        'addedAt': DateTime.now().toIso8601String(),
       });
+
+      // Save to SharedPreferences
+      await prefs.setString(_favoritesKey, jsonEncode(favorites));
+      
+      // Ensure data is persisted - reload to confirm save
+      await prefs.reload();
     } catch (e) {
-      rethrow;
+      throw Exception('Failed to add favorite: $e');
     }
   }
 
-  // Remove item from favorites
+  /// Remove item from favorites
   Future<void> removeFromFavorites(String itemId) async {
-    if (currentUserId == null) {
-      throw Exception('User not authenticated');
-    }
-
     try {
-      await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .collection('favorites')
-          .doc(itemId)
-          .delete();
+      final prefs = await _getPrefs();
+      final favorites = await getAllFavorites();
+      
+      // Remove the favorite
+      favorites.removeWhere((fav) => fav['itemId'] == itemId);
+
+      // Save to SharedPreferences
+      await prefs.setString(_favoritesKey, jsonEncode(favorites));
+      
+      // Ensure data is persisted - reload to confirm save
+      await prefs.reload();
     } catch (e) {
-      rethrow;
+      throw Exception('Failed to remove favorite: $e');
     }
   }
 
-  // Check if item is favorited
+  /// Check if item is favorited
   Future<bool> isFavorited(String itemId) async {
-    if (currentUserId == null) {
-      return false;
-    }
-
     try {
-      final doc = await _firestore
-          .collection('users')
-          .doc(currentUserId)
-          .collection('favorites')
-          .doc(itemId)
-          .get();
-      return doc.exists;
+      final favorites = await getAllFavorites();
+      return favorites.any((fav) => fav['itemId'] == itemId);
     } catch (e) {
       return false;
     }
   }
 
-  // Get all favorites
-  Stream<QuerySnapshot> getFavorites() {
-    if (currentUserId == null) {
-      return Stream.empty();
-    }
+  /// Get all favorites
+  Future<List<Map<String, dynamic>>> getAllFavorites() async {
+    try {
+      final prefs = await _getPrefs();
+      final favoritesJson = prefs.getString(_favoritesKey);
+      
+      if (favoritesJson == null || favoritesJson.isEmpty) {
+        return [];
+      }
 
-    return _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('favorites')
-        .orderBy('addedAt', descending: true)
-        .snapshots();
+      final List<dynamic> decoded = jsonDecode(favoritesJson);
+      return decoded.map((item) => Map<String, dynamic>.from(item)).toList()
+        ..sort((a, b) {
+          // Sort by addedAt descending (newest first)
+          final aDate = a['addedAt'] as String?;
+          final bDate = b['addedAt'] as String?;
+          if (aDate == null || bDate == null) return 0;
+          return bDate.compareTo(aDate);
+        });
+    } catch (e) {
+      return [];
+    }
   }
 
-  // Get favorites by type
-  Stream<QuerySnapshot> getFavoritesByType(String itemType) {
-    if (currentUserId == null) {
-      return Stream.empty();
+  /// Get favorites by type
+  Future<List<Map<String, dynamic>>> getFavoritesByType(String itemType) async {
+    try {
+      final favorites = await getAllFavorites();
+      return favorites.where((fav) => fav['itemType'] == itemType).toList();
+    } catch (e) {
+      return [];
     }
-
-    return _firestore
-        .collection('users')
-        .doc(currentUserId)
-        .collection('favorites')
-        .where('itemType', isEqualTo: itemType)
-        // Temporarily removed orderBy to fix index error
-        // .orderBy('addedAt', descending: true)
-        .snapshots();
   }
 
-  // Toggle favorite status
+  /// Toggle favorite status
   Future<void> toggleFavorite({
     required String itemId,
     required String itemType,
@@ -134,4 +131,14 @@ class FavoritesService {
       );
     }
   }
-} 
+
+  /// Clear all favorites
+  Future<void> clearAllFavorites() async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.remove(_favoritesKey);
+    } catch (e) {
+      throw Exception('Failed to clear favorites: $e');
+    }
+  }
+}

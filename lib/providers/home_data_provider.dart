@@ -100,8 +100,7 @@ class HomeDataNotifier extends StateNotifier<HomeDataState> {
 
   /// Load initial data from cache or API
   Future<void> loadInitialData() async {
-    if (state.isLoading) return;
-
+    // Don't return early - allow loading even if already loading to ensure data loads
     state = state.copyWith(isLoading: true, errorMessage: null);
 
     try {

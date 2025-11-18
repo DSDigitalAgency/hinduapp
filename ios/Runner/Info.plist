@@ -56,6 +56,13 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Universal Links - Associated Domains -->
+	<!-- Note: You need to enable Associated Domains capability in Xcode -->
+	<!-- Replace hinduconnect.app with your actual domain -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:hinduconnect.app</string>
+	</array>
 	<key>UIStatusBarHidden</key>
 	<true/>
 	

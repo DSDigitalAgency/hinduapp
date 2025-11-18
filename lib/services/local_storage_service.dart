@@ -11,26 +11,58 @@ class LocalStorageService {
   static const String _selectedLanguageCodeKey = 'selected_language_code';
   static const String _userLanguageKey = 'user_language';
   static const String _userLanguageCodeKey = 'user_language_code';
+  static const String _languageSelectedKey = 'language_selected';
   
   // Cache SharedPreferences instance for faster language access
   static SharedPreferences? _cachedPrefs;
 
   /// Get SharedPreferences instance (cached for performance)
   static Future<SharedPreferences> _getPrefs() async {
-    _cachedPrefs ??= await SharedPreferences.getInstance();
+    if (_cachedPrefs == null) {
+      _cachedPrefs = await SharedPreferences.getInstance();
+      // Always reload on first access to ensure we have latest data from disk
+      await _cachedPrefs!.reload();
+    }
     return _cachedPrefs!;
+  }
+  
+  /// Force refresh SharedPreferences cache (useful after saves)
+  static Future<void> refreshPrefsCache() async {
+    _cachedPrefs = await SharedPreferences.getInstance();
+    // Reload to ensure we have latest data from disk
+    await _cachedPrefs!.reload();
   }
 
   /// Get user language name quickly from cache if available
   static Future<String?> getUserLanguageNameQuickly() async {
     try {
-      final prefs = await _getPrefs();
+      // Get a fresh instance to ensure we have latest data from disk
+      final prefs = await SharedPreferences.getInstance();
+      
+      // CRITICAL: Reload preferences to ensure we have latest data from disk
+      await prefs.reload();
+      
+      // Update cached instance
+      _cachedPrefs = prefs;
 
       // First try user language (from Firestore/auth)
       String? userLanguage = prefs.getString(_userLanguageKey);
       String? selectedLanguage = prefs.getString(_selectedLanguageKey);
 
-      // Debug logging to see what's stored
+      // Fix legacy "English" to "Roman itrans (English)"
+      if (userLanguage == 'English') {
+        userLanguage = 'Roman itrans (English)';
+        await prefs.setString(_userLanguageKey, userLanguage);
+        await prefs.setString(_selectedLanguageKey, userLanguage);
+        await prefs.setString(_selectedLanguageCodeKey, 'en');
+        await prefs.reload();
+      }
+      if (selectedLanguage == 'English') {
+        selectedLanguage = 'Roman itrans (English)';
+        await prefs.setString(_selectedLanguageKey, selectedLanguage);
+        await prefs.setString(_selectedLanguageCodeKey, 'en');
+        await prefs.reload();
+      }
 
       // If both exist and are different, there's a conflict - use user language (more authoritative)
       if (userLanguage != null && userLanguage.isNotEmpty) {
@@ -39,20 +71,18 @@ class LocalStorageService {
           final userLanguageCode = getLanguageCodeFromName(userLanguage);
           await prefs.setString(_selectedLanguageKey, userLanguage);
           await prefs.setString(_selectedLanguageCodeKey, userLanguageCode);
+          await prefs.reload();
         }
         return userLanguage;
       }
 
       // Fallback to selected language (from language selection)
       if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
-        
         return selectedLanguage;
       }
 
-      
       return null;
     } catch (e) {
-      
       return null;
     }
   }
@@ -60,7 +90,8 @@ class LocalStorageService {
   /// Synchronize all language preferences to a single value
   static Future<void> synchronizeLanguagePreferences(String language) async {
     try {
-      final prefs = await _getPrefs();
+      // Get a fresh instance to ensure we're working with latest data
+      final prefs = await SharedPreferences.getInstance();
       final languageCode = getLanguageCodeFromName(language);
 
       // Set both user and selected language to the same value
@@ -68,8 +99,19 @@ class LocalStorageService {
       await prefs.setString(_userLanguageCodeKey, languageCode);
       await prefs.setString(_selectedLanguageKey, language);
       await prefs.setString(_selectedLanguageCodeKey, languageCode);
+      
+      // Ensure language selected flag is set to true if we have a language
+      await prefs.setBool(_languageSelectedKey, true);
 
-
+      // CRITICAL: Add small delay to ensure write operations complete before app can be killed
+      await Future.delayed(const Duration(milliseconds: 150));
+      
+      // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
+      await prefs.reload();
+      
+      // Update cached instance
+      _cachedPrefs = prefs;
+      
       // Verify synchronization
       await debugLanguagePreferences();
     } catch (e) {
@@ -90,10 +132,32 @@ class LocalStorageService {
   /// Check and fix any language inconsistencies
   static Future<void> checkAndFixLanguageConsistency() async {
     try {
-      final prefs = await _getPrefs();
+      // Get a fresh instance to ensure we have latest data from disk
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      _cachedPrefs = prefs;
 
       String? userLanguage = prefs.getString(_userLanguageKey);
       String? selectedLanguage = prefs.getString(_selectedLanguageKey);
+      final isLanguageSelected = prefs.getBool(_languageSelectedKey) ?? false;
+
+      // Fix legacy "English" to "Roman itrans (English)"
+      if (userLanguage == 'English') {
+        userLanguage = 'Roman itrans (English)';
+        await prefs.setString(_userLanguageKey, userLanguage);
+      }
+      if (selectedLanguage == 'English') {
+        selectedLanguage = 'Roman itrans (English)';
+        await prefs.setString(_selectedLanguageKey, selectedLanguage);
+      }
+
+      // If we have any language saved, ensure the flag is set
+      if ((userLanguage != null && userLanguage.isNotEmpty) ||
+          (selectedLanguage != null && selectedLanguage.isNotEmpty)) {
+        if (!isLanguageSelected) {
+          await prefs.setBool(_languageSelectedKey, true);
+        }
+      }
 
       // If we have userLanguage but no selectedLanguage (the current issue)
       if (userLanguage != null &&
@@ -102,6 +166,10 @@ class LocalStorageService {
         final userLanguageCode = getLanguageCodeFromName(userLanguage);
         await prefs.setString(_selectedLanguageKey, userLanguage);
         await prefs.setString(_selectedLanguageCodeKey, userLanguageCode);
+        await prefs.setBool(_languageSelectedKey, true);
+        await Future.delayed(const Duration(milliseconds: 100));
+        await prefs.reload();
+        _cachedPrefs = prefs;
       }
       // If we have selectedLanguage but no userLanguage
       else if (selectedLanguage != null &&
@@ -110,6 +178,10 @@ class LocalStorageService {
         final selectedLanguageCode = getLanguageCodeFromName(selectedLanguage);
         await prefs.setString(_userLanguageKey, selectedLanguage);
         await prefs.setString(_userLanguageCodeKey, selectedLanguageCode);
+        await prefs.setBool(_languageSelectedKey, true);
+        await Future.delayed(const Duration(milliseconds: 100));
+        await prefs.reload();
+        _cachedPrefs = prefs;
       }
       // If both exist but are different
       else if (userLanguage != null &&
@@ -119,6 +191,10 @@ class LocalStorageService {
         final userLanguageCode = getLanguageCodeFromName(userLanguage);
         await prefs.setString(_selectedLanguageKey, userLanguage);
         await prefs.setString(_selectedLanguageCodeKey, userLanguageCode);
+        await prefs.setBool(_languageSelectedKey, true);
+        await Future.delayed(const Duration(milliseconds: 100));
+        await prefs.reload();
+        _cachedPrefs = prefs;
       }
     } catch (e) {
       // Handle error silently - language consistency check will be skipped
@@ -409,27 +485,56 @@ class LocalStorageService {
   
   // Get user's preferred language
   static Future<String?> getUserPreferredLanguage() async {
+    // Get a fresh instance to ensure we have latest data from disk
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    _cachedPrefs = prefs;
     
     // First try to get from user profile (from Firestore)
     String? language = prefs.getString(_userLanguageKey);
+    
+    // Fix legacy "English" to "Roman itrans (English)"
+    if (language == 'English') {
+      language = 'Roman itrans (English)';
+      await prefs.setString(_userLanguageKey, language);
+      await prefs.setString(_selectedLanguageKey, language);
+      await prefs.setString(_selectedLanguageCodeKey, 'en');
+      await prefs.reload();
+    }
+    
     if (language != null && language.isNotEmpty) {
       return language;
     }
     
     // Fallback to selected language (from language selection screen)
     language = prefs.getString(_selectedLanguageKey);
+    
+    // Fix legacy "English" to "Roman itrans (English)"
+    if (language == 'English') {
+      language = 'Roman itrans (English)';
+      await prefs.setString(_selectedLanguageKey, language);
+      await prefs.setString(_selectedLanguageCodeKey, 'en');
+      await prefs.reload();
+    }
+    
     if (language != null && language.isNotEmpty) {
       return language;
     }
     
-    // Default to Devanagari (Hindi) if no language is set
-    return 'Devanagari (Hindi)';
+    // Only return null if no language is set (don't default here - let caller decide)
+    return null;
   }
 
   // Get user's preferred language code
   static Future<String?> getUserPreferredLanguageCode() async {
-    final prefs = await _getPrefs();
+    // Get a fresh instance to ensure we have latest data from disk
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Reload to ensure we have latest data
+    await prefs.reload();
+    
+    // Update cached instance
+    _cachedPrefs = prefs;
     
     // First try to get from user profile (from Firestore)
     String? languageCode = prefs.getString(_userLanguageCodeKey);
@@ -443,8 +548,9 @@ class LocalStorageService {
       return languageCode;
     }
     
-    // Default to 'hi' if no language code is set
-    return 'hi';
+    // Don't return a default - return null if no language code is set
+    // This prevents overriding saved languages
+    return null;
   }
 
   // Get both language and language code
@@ -460,26 +566,78 @@ class LocalStorageService {
 
   // Save language preference from user profile
   static Future<void> saveUserLanguagePreference(String language, String languageCode) async {
-    final prefs = await _getPrefs();
+    // Get a fresh instance to ensure we're working with latest data
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Save all language-related keys
     await prefs.setString(_userLanguageKey, language);
     await prefs.setString(_userLanguageCodeKey, languageCode);
     
     // CRITICAL FIX: Also sync selected language to prevent inconsistencies
     await prefs.setString(_selectedLanguageKey, language);
     await prefs.setString(_selectedLanguageCodeKey, languageCode);
+    
+    // Ensure language selected flag is set to true
+    await prefs.setBool(_languageSelectedKey, true);
+    
+    // CRITICAL: Add small delay to ensure write operations complete before app can be killed
+    await Future.delayed(const Duration(milliseconds: 150));
+    
+    // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
+    await prefs.reload();
+    
+    // Update cached instance
+    _cachedPrefs = prefs;
+  }
 
+  /// Check if language has been selected (first launch check)
+  static Future<bool> isLanguageSelected() async {
+    // Get a fresh instance to ensure we have latest data from disk
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    _cachedPrefs = prefs;
+    return prefs.getBool(_languageSelectedKey) ?? false;
+  }
+
+  /// Mark that language has been selected
+  static Future<void> setLanguageSelected(bool value) async {
+    // Get a fresh instance to ensure we're working with latest data
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_languageSelectedKey, value);
+    
+    // CRITICAL: Add small delay to ensure write operations complete before app can be killed
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+    // CRITICAL: Force commit by reloading - this ensures data is written to disk
+    await prefs.reload();
+    // Update cached instance
+    _cachedPrefs = prefs;
   }
 
   // Save language preference from language selection screen
   static Future<void> saveSelectedLanguagePreference(String language, String languageCode) async {
-    final prefs = await _getPrefs();
+    // Get a fresh instance to ensure we're working with latest data
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Save all language-related keys
     await prefs.setString(_selectedLanguageKey, language);
     await prefs.setString(_selectedLanguageCodeKey, languageCode);
     
     // CRITICAL FIX: Also sync user language to prevent inconsistencies
     await prefs.setString(_userLanguageKey, language);
     await prefs.setString(_userLanguageCodeKey, languageCode);
-
+    
+    // Ensure language selected flag is set to true
+    await prefs.setBool(_languageSelectedKey, true);
+    
+    // CRITICAL: Add small delay to ensure write operations complete before app can be killed
+    await Future.delayed(const Duration(milliseconds: 150));
+    
+    // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
+    await prefs.reload();
+    
+    // Update cached instance
+    _cachedPrefs = prefs;
   }
 
   // Clear all language preferences
@@ -509,7 +667,7 @@ class LocalStorageService {
     'ml': 'Malayalam',
     'or': 'Oriya (Odia)',
     'pa': 'Punjabi (Gurmukhi)',
-    'en': 'English',
+    'en': 'Roman itrans (English)', // Fixed: Map 'en' to 'Roman itrans (English)' not 'English'
     'ta': 'Tamil',
     'te': 'Telugu',
     'ur': 'Urdu',
@@ -562,9 +720,63 @@ class LocalStorageService {
 
   // Get user's preferred language name for database queries
   static Future<String?> getUserPreferredLanguageName() async {
+    // First try to get the stored language name directly
+    // Get a fresh instance to ensure we have latest data from disk
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Reload to ensure we have latest data
+    await prefs.reload();
+    
+    // Update cached instance
+    _cachedPrefs = prefs;
+    
+    String? language = prefs.getString(_userLanguageKey);
+    
+    // Fix legacy "English" to "Roman itrans (English)"
+    if (language == 'English') {
+      language = 'Roman itrans (English)';
+      await prefs.setString(_userLanguageKey, language);
+      await prefs.setString(_selectedLanguageKey, language);
+      await prefs.setString(_selectedLanguageCodeKey, 'en');
+      await prefs.reload();
+      return language;
+    }
+    
+    if (language != null && language.isNotEmpty) {
+      return language;
+    }
+    
+    // Fallback to selected language
+    language = prefs.getString(_selectedLanguageKey);
+    if (language == 'English') {
+      language = 'Roman itrans (English)';
+      await prefs.setString(_selectedLanguageKey, language);
+      await prefs.setString(_selectedLanguageCodeKey, 'en');
+      await prefs.reload();
+      return language;
+    }
+    
+    if (language != null && language.isNotEmpty) {
+      return language;
+    }
+    
+    // Last resort: get from code
     final languageCode = await getUserPreferredLanguageCode();
-    final languageName = getLanguageNameFromCode(languageCode);
-    return languageName;
+    if (languageCode != null) {
+      final languageName = getLanguageNameFromCode(languageCode);
+      
+      // Fix if code returned "English" (shouldn't happen now, but just in case)
+      if (languageName == 'English') {
+        return 'Roman itrans (English)';
+      }
+      
+      if (languageName != null && languageName.isNotEmpty) {
+        return languageName;
+      }
+    }
+    
+    // Return null if no language found (don't default here)
+    return null;
   }
 
   // Convert language name to API language code

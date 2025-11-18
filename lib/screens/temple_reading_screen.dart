@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:screen_protector/screen_protector.dart';
 import '../services/local_storage_service.dart';
 import '../services/favorites_service.dart';
 import '../services/cache_service.dart';
 import '../services/markdown_service.dart';
+import '../services/deep_link_service.dart';
 import '../models/temple_model.dart';
 import '../widgets/reading_settings_widget.dart';
 import '../providers/reading_settings_provider.dart';
@@ -60,14 +62,27 @@ class _TempleReadingScreenState extends ConsumerState<TempleReadingScreen> with 
     if (widget.temple != null) {
       _templeModel = TempleModel.fromJson(widget.temple!);
     }
-    _loadUserLanguagePreference();
-    _loadDetailedTemple();
-    _checkFavoriteStatus();
-    // Reading settings handled by global provider
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      // Enable screen protection
+      await ScreenProtector.protectDataLeakageOn();
+      
+      _loadUserLanguagePreference();
+      _loadDetailedTemple();
+      _checkFavoriteStatus();
+      // Reading settings handled by global provider
+    } catch (e) {
+      // Error in _init: $e
+    }
   }
 
   @override
   void dispose() {
+    // Disable screen protection when leaving the screen
+    ScreenProtector.protectDataLeakageOff();
     _scrollController.dispose();
     super.dispose();
   }
@@ -245,12 +260,20 @@ class _TempleReadingScreenState extends ConsumerState<TempleReadingScreen> with 
   }
 
   Future<void> _shareTemple() async {
-    final shareText = '''
-${_getTempleContent().substring(0, _getTempleContent().length > 200 ? 200 : _getTempleContent().length)}...
-
-Read more in Hindu Connect App:
-https://play.google.com/store/apps/details?id=com.dikonda.hinduconnect
-''';
+    final templeId = _detailedTempleModel?.templeId ?? 
+                    _templeModel?.templeId ?? 
+                    widget.temple?['templeId'] ?? 
+                    widget.templeId;
+    
+    final content = _getTempleContent();
+    final preview = content.length > 200 ? '${content.substring(0, 200)}...' : content;
+    
+    final shareText = DeepLinkService.generateShareText(
+      preview: preview,
+      type: 'temple',
+      id: templeId,
+      title: _getTempleTitle(),
+    );
 
     // FIXED: Correctly call the share method
     await SharePlus.instance.share(ShareParams(text: shareText));

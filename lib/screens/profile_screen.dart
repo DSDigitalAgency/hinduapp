@@ -3,10 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
-import '../services/auth_service.dart';
-import '../services/pincode_service.dart';
 import '../services/language_conversion_service.dart';
-import '../models/user_model.dart';
 import '../providers/language_provider.dart';
 import 'favorites_screen.dart';
 import 'reading_history_screen.dart';
@@ -23,10 +20,9 @@ class ProfileScreen extends ConsumerStatefulWidget {
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   
-  final AuthService _authService = AuthService();
-  UserModel? _userData;
   bool _isLoading = true;
-  bool _isEditing = false;
+  bool _isLanguageDialogOpen = false;
+  bool _isUpdatingLanguage = false;
 
   @override
   void initState() {
@@ -35,24 +31,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Future<void> _loadUserData() async {
-    try {
-      final user = _authService.currentUser;
-      if (user != null) {
-        final userData = await _authService.getUserData(user.uid);
-        setState(() {
-          _userData = userData;
-          _isLoading = false;
-        });
-      } else {
+    // No authentication required - app works without user data
         setState(() {
           _isLoading = false;
         });
-      }
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
   }
 
   @override
@@ -75,10 +57,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       child: Column(
                         children: [
                           SizedBox(height: AppTheme.spacingL),
-                          _buildUserDetailsSection(),
-                          SizedBox(height: AppTheme.spacingXXL),
                           _buildMenuSection(),
-                          _buildSignOutButton(),
                           SizedBox(height: AppTheme.spacingXXL),
                         ],
                       ),
@@ -132,117 +111,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ],
           ),
           const Spacer(),
-          if (_userData != null)
-            Container(
-              decoration: BoxDecoration(
-                color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(AppTheme.borderRadiusM),
-              ),
-              child: IconButton(
-                onPressed: () {
-                  setState(() {
-                    _isEditing = !_isEditing;
-                  });
-                  if (_isEditing) {
-                    _showEditProfileDialog();
-                  }
-                },
-                icon: Icon(
-                  _isEditing ? Icons.close : Icons.edit_outlined,
-                  color: AppTheme.primaryColor,
-                  size: 24,
-                ),
-              ),
-            ),
         ],
       ),
     );
   }
 
-  Widget _buildUserDetailsSection() {
-    final user = _authService.currentUser;
-    final displayName = _userData?.name ?? user?.displayName ?? 'User';
-    
-    // Email handling - prioritize Firebase Auth email, then Firestore email
-    String email = 'Email not available';
-    
-    // First try Firebase Auth email
-    if (user?.email != null && user!.email!.isNotEmpty) {
-      email = user.email!;
-    } 
-    // Then try Firestore email (but only if it's not empty)
-    else if (_userData?.email != null && _userData!.email.isNotEmpty) {
-      email = _userData!.email;
-    }
-    // If both are empty or null, show a helpful message
-    else {
-      email = 'Email not set';
-    }
-    
-    final phone = _userData?.phone ?? 'Not provided';
-    final bool hasLocation = (_userData?.city ?? '').isNotEmpty && (_userData?.state ?? '').isNotEmpty;
-    final location = hasLocation ? '${_userData!.city}, ${_userData!.state}' : 'Location not set';
-    final language = _userData?.language ?? 'Roman itrans (English)';
-
-    return Container(
-      padding: const EdgeInsets.all(AppTheme.spacingL),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppTheme.borderRadiusXL),
-        boxShadow: [AppTheme.lightShadow],
-      ),
-      child: Column(
-        children: [
-          // User name at top, centered
-          Text(
-            displayName,
-            style: const TextStyle(
-              fontSize: AppTheme.textSizeXXXL,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimaryColor,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          
-          SizedBox(height: AppTheme.spacingXL),
-          
-          // Email
-          _buildUserDetailItem(
-            Icons.email_outlined,
-            'Email',
-            email,
-          ),
-          
-          _buildDivider(),
-          
-          // Phone
-          _buildUserDetailItem(
-            Icons.phone_outlined,
-            'Phone',
-            phone,
-          ),
-          
-          _buildDivider(),
-          
-          // Location
-          _buildUserDetailItem(
-            Icons.location_on_outlined,
-            'Location',
-            hasLocation ? location : 'Not set',
-          ),
-          
-          _buildDivider(),
-          
-          // Selected Language
-          _buildUserDetailItem(
-            Icons.language_outlined,
-            'Selected Language',
-            language,
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildMenuSection() {
     return Column(
@@ -552,40 +425,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _buildSignOutButton() {
-    return Container(
-      margin: const EdgeInsets.only(top: AppTheme.spacingXL),
-      child: ElevatedButton.icon(
-        onPressed: _showSignOutDialog,
-        icon: const Icon(Icons.logout_outlined),
-        label: const Text('Sign Out'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.errorColor,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.borderRadiusL),
-          ),
-          padding: const EdgeInsets.symmetric(
-            vertical: AppTheme.spacingL,
-            horizontal: AppTheme.spacingXL,
-          ),
-          elevation: 2,
-        ),
-      ),
-    );
-  }
 
   void _showFeedbackDialog() {
-    // Prioritize Firebase Auth email over Firestore email if Firestore email is empty
-    final userName = _userData?.name ?? _authService.currentUser?.displayName ?? '';
-    final userData = _userData;
-    String userEmail;
-    final email = userData?.email;
-    if (email != null && email.isNotEmpty) {
-      userEmail = email;
-    } else {
-      userEmail = _authService.currentUser?.email ?? '';
-    }
+    // App works without authentication
+    final userName = 'Guest User';
+    final userEmail = '';
     
     final nameController = TextEditingController(text: userName);
     final emailController = TextEditingController(text: userEmail);
@@ -965,332 +809,7 @@ Sent from Hindu Connect App
     );
   }
 
-  void _showEditProfileDialog() {
-    final nameController = TextEditingController(text: _userData?.name ?? '');
-    final phoneController = TextEditingController(text: _userData?.phone ?? '');
-    final pincodeController = TextEditingController(text: _userData?.pincode ?? '');
-    
-    String? city;
-    String? state;
-    String? pincodeError;
-    bool isPincodeValidating = false;
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 400),
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.edit,
-                        color: AppTheme.primaryColor,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Text(
-                      'Edit Profile',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                
-                // Content
-                Flexible(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildTextField(
-                          controller: nameController,
-                          label: 'Name',
-                          icon: Icons.person_outline,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildTextField(
-                          controller: phoneController,
-                          label: 'Phone Number',
-                          icon: Icons.phone_outlined,
-                          keyboardType: TextInputType.phone,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildTextField(
-                          controller: pincodeController,
-                          label: 'Pincode',
-                          icon: Icons.location_on_outlined,
-                          keyboardType: TextInputType.number,
-                          maxLength: 6,
-                          suffixIcon: isPincodeValidating
-                              ? const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                                    ),
-                                  ),
-                                )
-                              : null,
-                          errorText: pincodeError,
-                          onChanged: (value) async {
-                            if (value.length == 6) {
-                              setDialogState(() {
-                                isPincodeValidating = true;
-                                pincodeError = null;
-                              });
-                              
-                              try {
-                                final pincodeInfo = await PincodeService.getPincodeInfo(value);
-                                
-                                setDialogState(() {
-                                  if (pincodeInfo != null) {
-                                    city = pincodeInfo.city;
-                                    state = pincodeInfo.state;
-                                    pincodeError = null;
-                                  } else {
-                                    pincodeError = 'Invalid pincode';
-                                    city = null;
-                                    state = null;
-                                  }
-                                  isPincodeValidating = false;
-                                });
-                              } catch (e) {
-                                setDialogState(() {
-                                  pincodeError = 'Error validating pincode';
-                                  city = null;
-                                  state = null;
-                                  isPincodeValidating = false;
-                                });
-                              }
-                            } else {
-                              setDialogState(() {
-                                pincodeError = null;
-                                city = null;
-                                state = null;
-                              });
-                            }
-                          },
-                        ),
-                        
-                        // City and State display
-                        if (city != null && state != null) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.green.shade200),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(Icons.check, color: Colors.white, size: 16),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    '$city, $state',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                
-                // Action Buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          setState(() {
-                            _isEditing = false;
-                          });
-                        },
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: Colors.grey.shade300),
-                          ),
-                        ),
-                        child: const Text(
-                          'Cancel',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black54,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          if (city == null || state == null) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Please enter a valid pincode'),
-                                  backgroundColor: AppTheme.errorColor,
-                                ),
-                              );
-                            }
-                            return;
-                          }
-                          
-                          // Store context before async operation
-                          final navigatorContext = context;
-                          
-                          await _updateProfile(
-                            nameController.text,
-                            phoneController.text,
-                            pincodeController.text,
-                            city!,
-                            state!,
-                          );
-                          if (mounted && navigatorContext.mounted) {
-                            Navigator.pop(navigatorContext);
-                          }
-                          setState(() {
-                            _isEditing = false;
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryColor,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 0,
-                        ),
-                        child: const Text(
-                          'Save',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _updateProfile(String name, String phone, String pincode, String city, String state) async {
-    try {
-      final user = _authService.currentUser;
-      if (user != null && _userData != null) {
-        final updatedUser = _userData!.copyWith(
-          name: name,
-          phone: phone,
-          pincode: pincode,
-          city: city,
-          state: state,
-        );
-        
-        await _authService.updateUserData(updatedUser);
-        
-        if (mounted) {
-          setState(() {
-            _userData = updatedUser;
-          });
-          
-          _showSuccessSnackBar('Profile updated successfully!');
-        }
-      }
-    } catch (e) {
-      _showErrorSnackBar('Error updating profile: $e');
-    }
-  }
-
-  void _showSignOutDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Sign Out'),
-        content: const Text('Are you sure you want to sign out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _signOut();
-            },
-                    style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.errorColor,
-          foregroundColor: AppTheme.creamColor,
-        ),
-            child: const Text('Sign Out'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _signOut() async {
-    try {
-      await _authService.signOut();
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/login');
-      }
-    } catch (e) {
-      _showErrorSnackBar('Error signing out: $e');
-    }
-  }
 
   // Unused helper kept for future features; suppress unused_element lint
   // ignore: unused_element
@@ -1508,9 +1027,15 @@ Sent from Hindu Connect App
     {'name': 'Tibetan', 'code': 'bo'},
   ];
 
-  void _showLanguageSelectionDialog() {
-    final currentLanguage = _userData?.language ?? 'Roman itrans (English)';
+  void _showLanguageSelectionDialog() async {
+    // Prevent opening multiple dialogs
+    if (_isLanguageDialogOpen) {
+      return;
+    }
     
+    final currentLanguage = await LocalStorageService.getUserPreferredLanguageName() ?? 'Roman itrans (English)';
+    
+    _isLanguageDialogOpen = true;
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -1528,11 +1053,16 @@ Sent from Hindu Connect App
                 return Column(
                   children: [
                     ListTile(
+                      enabled: !_isUpdatingLanguage,
                       title: Text(
                         language['name']!,
                         style: TextStyle(
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          color: isSelected ? AppTheme.primaryColor : AppTheme.textPrimaryColor,
+                          color: isSelected 
+                              ? AppTheme.primaryColor 
+                              : (_isUpdatingLanguage 
+                                  ? Colors.grey 
+                                  : AppTheme.textPrimaryColor),
                         ),
                       ),
                       trailing: isSelected 
@@ -1542,12 +1072,22 @@ Sent from Hindu Connect App
                           )
                         : null,
                       onTap: () async {
-                        // Store context before async operation
+                        // Prevent multiple simultaneous updates
+                        if (_isUpdatingLanguage) {
+                          return;
+                        }
+                        
+                        // Close dialog first to prevent navigation issues
                         final navigatorContext = context;
-                        await _updateUserLanguage(language['name']!, language['code']!);
-                        if (mounted && navigatorContext.mounted) {
+                        _isLanguageDialogOpen = false;
+                        
+                        // Close dialog immediately before async operations
+                        if (navigatorContext.mounted) {
                           Navigator.pop(navigatorContext);
                         }
+                        
+                        // Then update language (this might trigger UI rebuilds)
+                        await _updateUserLanguage(language['name']!, language['code']!);
                       },
                     ),
                     if (index < _languages.length - 1)
@@ -1564,44 +1104,62 @@ Sent from Hindu Connect App
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () {
+                _isLanguageDialogOpen = false;
+                Navigator.pop(context);
+              },
               child: const Text('Cancel'),
             ),
           ],
         ),
       ),
-    );
+    ).then((_) {
+      // Reset flag when dialog is closed
+      _isLanguageDialogOpen = false;
+    });
   }
 
   Future<void> _updateUserLanguage(String language, String languageCode) async {
-    try {
-      if (_userData != null) {
-        final updatedUser = _userData!.copyWith(
-          language: language,
-          languageCode: languageCode,
-        );
-        
-        // Save to Firestore
-        await _authService.updateUserData(updatedUser);
-        
-        // ALSO save to LocalStorage so other screens can access it
-        await LocalStorageService.saveUserLanguagePreference(language, languageCode);
-        
-        // Update local state
+    // Prevent multiple simultaneous updates
+    if (_isUpdatingLanguage) {
+      return;
+    }
+    
         setState(() {
-          _userData = updatedUser;
+      _isUpdatingLanguage = true;
         });
+    
+    try {
+      // Save to LocalStorage so other screens can access it
+      await LocalStorageService.saveUserLanguagePreference(language, languageCode);
         
         // Clear cached conversions when language changes
         await LanguageConversionService().clearCachedConversions();
         
         // Update language in Riverpod provider - this will trigger automatic refresh
+      // Use a small delay to ensure dialog is fully closed before triggering rebuilds
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      if (mounted) {
         await ref.read(languageProvider.notifier).updateLanguage(language);
         
+        // Show snackbar after a brief delay to ensure UI is stable
+        await Future.delayed(const Duration(milliseconds: 200));
+        
+        if (mounted) {
         _showInfoSnackBar('Language updated to $language');
+        }
       }
     } catch (e) {
+      if (mounted) {
       _showErrorSnackBar('Error updating language: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingLanguage = false;
+        });
+      }
     }
   }
 

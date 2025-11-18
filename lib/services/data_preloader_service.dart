@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 import '../services/api_service.dart';
-import '../services/auth_service.dart';
 import '../services/local_storage_service.dart';
 import '../services/language_conversion_service.dart';
 import '../services/biography_service.dart';
@@ -14,7 +13,6 @@ class DataPreloaderService {
   static const String _defaultLanguage = 'Devanagari (Hindi)';
 
   final ApiService _apiService = ApiService();
-  final AuthService _authService = AuthService();
   final LanguageConversionService _languageConversionService =
       LanguageConversionService();
   final BiographyService _biographyService = BiographyService();
@@ -258,15 +256,6 @@ class DataPreloaderService {
   /// Load user preferred language
   Future<void> _loadUserPreferredLanguage() async {
     try {
-      final user = _authService.currentUser;
-      if (user != null) {
-        final userData = await _authService.getUserData(user.uid);
-        if (userData?.language != null && userData!.language!.isNotEmpty) {
-          _cachedUserLanguage = userData.language;
-          return;
-        }
-      }
-
       final languageName =
           await LocalStorageService.getUserPreferredLanguageName();
       _cachedUserLanguage = languageName ?? _defaultLanguage;
@@ -341,7 +330,13 @@ class DataPreloaderService {
           try {
             final sacredText = SacredTextModel.fromJson(sacredTextData);
             if (sacredText.text != null && sacredText.text!.isNotEmpty) {
-              nativeSacredTexts.add(sacredText);
+              // Ensure languageUsed is set correctly for native languages
+              // Create a copy with correct language info to ensure it's not marked as converted
+              final correctedSacredText = sacredText.copyWith(
+                languageUsed: userLanguage,
+                isConverted: false, // Native languages are never converted
+              );
+              nativeSacredTexts.add(correctedSacredText);
             }
           } catch (e) {
             // Skip invalid data
@@ -368,7 +363,12 @@ class DataPreloaderService {
               (existing) => existing.title == sacredText.title,
             );
             if (!isDuplicate) {
-              nativeSacredTexts.add(sacredText);
+              // Ensure languageUsed is set correctly for native languages
+              final correctedSacredText = sacredText.copyWith(
+                languageUsed: userLanguage,
+                isConverted: false, // Native languages are never converted
+              );
+              nativeSacredTexts.add(correctedSacredText);
             }
           }
         }
@@ -885,21 +885,31 @@ class DataPreloaderService {
   bool _isNativeLanguage(String language) {
     final nativeLanguages = [
       'English',
+      'Roman itrans (English)',
+      'itrans (English)',
       _defaultLanguage,
       'Devanagari',
+      'Devanagari (Hindi)',
       'Tamil',
       'Telugu',
       'Malayalam',
       'Kannada',
     ];
-    final isNative = nativeLanguages.contains(language);
-    return isNative;
+    // Check exact match first
+    if (nativeLanguages.contains(language)) {
+      return true;
+    }
+    // Also check case-insensitive match
+    final languageLower = language.toLowerCase();
+    return nativeLanguages.any((native) => native.toLowerCase() == languageLower);
   }
 
   /// Get language code from language name
   String _getLanguageCode(String languageName) {
     switch (languageName.toLowerCase()) {
       case 'english':
+      case 'roman itrans (english)':
+      case 'itrans (english)':
       case 'en':
         return 'en';
       case 'devanagari (hindi)':
@@ -962,6 +972,8 @@ class DataPreloaderService {
     // For API calls, we need to map user languages to API-supported language codes
     switch (userLanguage.toLowerCase()) {
       case 'english':
+      case 'roman itrans (english)':
+      case 'itrans (english)':
       case 'en':
         return 'en';
       case 'devanagari (hindi)':
