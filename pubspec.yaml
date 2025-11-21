@@ -5,7 +5,7 @@ description: "World's 1st Complete Devotional App - Hindu Connect"
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 
-version: 1.0.3+9
+version: 1.0.5+11
 
 environment:
   sdk: ^3.8.0

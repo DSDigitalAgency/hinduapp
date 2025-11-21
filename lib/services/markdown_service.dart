@@ -32,6 +32,9 @@ class MarkdownService {
         .replaceAll('<br>', '\n\n')
         .replaceAll('</br>', '\n\n')
         .replaceAll(RegExp(r'<[^>]*>'), '') // Remove HTML tags but keep markdown
+        .replaceAll(RegExp(r'~~([^~]+)~~'), r'\1') // Remove strikethrough markdown (~~text~~)
+        .replaceAll(RegExp(r'<del>([^<]+)</del>'), r'\1') // Remove HTML strikethrough tags
+        .replaceAll(RegExp(r'<s>([^<]+)</s>'), r'\1') // Remove HTML strikethrough tags
         .replaceAll(RegExp(r'\n\s*\n'), '\n\n') // Clean up multiple newlines
         .replaceAll(RegExp(r'\n{3,}'), '\n\n') // Limit consecutive newlines to max 2
         .trim();
@@ -118,6 +121,10 @@ class MarkdownService {
         fontFamily: 'monospace',
       ),
       listBullet: baseStyle,
+      // Remove strikethrough decoration for del (strikethrough) elements
+      del: baseStyle.copyWith(
+        decoration: TextDecoration.none, // Remove strikethrough
+      ),
     );
   }
 }

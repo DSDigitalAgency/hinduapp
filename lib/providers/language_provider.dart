@@ -1,16 +1,24 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/local_storage_service.dart';
 import '../services/data_preloader_service.dart';
 
 /// Provider for current user language
 class LanguageNotifier extends StateNotifier<String> {
-  LanguageNotifier() : super(_defaultLanguage) {
+  LanguageNotifier() : super(_getPreloadedLanguage()) {
     // Start initialization immediately but don't block
     _initLanguageImmediately();
   }
 
   static const String _defaultLanguage = 'Devanagari (Hindi)';
   bool _isInitialized = false;
+  
+  /// Get pre-loaded language from main() if available
+  static String _getPreloadedLanguage() {
+    // Get pre-loaded language from LocalStorageService (set in main() before runApp())
+    final preloaded = LocalStorageService.getPreloadedLanguage();
+    return preloaded ?? _defaultLanguage;
+  }
 
   /// Initialize language immediately - first from cache, then from auth
   Future<void> _initLanguageImmediately() async {
@@ -21,7 +29,20 @@ class LanguageNotifier extends StateNotifier<String> {
       // CRITICAL FIX: Check and fix language inconsistencies first
       await LocalStorageService.checkAndFixLanguageConsistency();
 
-      // First, try to get language from SharedPreferences
+      // CRITICAL: First check if we have a pre-loaded language from main()
+      // This ensures we use the language that was loaded before the app started
+      final preloadedLanguage = LocalStorageService.getPreloadedLanguage();
+      if (preloadedLanguage != null && preloadedLanguage.isNotEmpty) {
+        if (mounted) {
+          state = preloadedLanguage;
+          // Ensure it's synchronized (already done in main(), but double-check)
+          await LocalStorageService.synchronizeLanguagePreferences(preloadedLanguage);
+          _isInitialized = true;
+          return; // Early return - use pre-loaded language
+        }
+      }
+      
+      // Fallback: Try to get language from SharedPreferences (fastest path)
       final cachedLanguage = await _getCachedLanguageQuickly();
       if (cachedLanguage != null && cachedLanguage.isNotEmpty) {
         if (mounted) {
@@ -39,11 +60,11 @@ class LanguageNotifier extends StateNotifier<String> {
         // Always update state with the result, even if it's the default
         state = fullLanguage;
         
-        // Always synchronize to ensure consistency - this ensures the flag is set
-        // Only skip if this is truly first launch (no language selected flag)
+        // CRITICAL: Always synchronize if language was selected before, even if it's default
+        // This ensures the flag and all language keys are properly set
         final isLanguageSelected = await LocalStorageService.isLanguageSelected();
-        if (isLanguageSelected && fullLanguage != _defaultLanguage) {
-          // Only sync if we have a non-default language and it was selected before
+        if (isLanguageSelected) {
+          // Always sync to ensure consistency, even if it's the default language
           await LocalStorageService.synchronizeLanguagePreferences(fullLanguage);
         }
         _isInitialized = true;
@@ -103,6 +124,9 @@ class LanguageNotifier extends StateNotifier<String> {
   /// Get current user language from storage
   Future<String> getCurrentLanguage() async {
     try {
+      // CRITICAL: Refresh cache first to ensure we have latest data
+      await LocalStorageService.refreshPrefsCache();
+      
       // First check if language has been selected (first launch check)
       final isLanguageSelected = await LocalStorageService.isLanguageSelected();
       
@@ -112,28 +136,58 @@ class LanguageNotifier extends StateNotifier<String> {
       }
       
       // Language has been selected before, try to get it
-      final languageName =
-          await LocalStorageService.getUserPreferredLanguageName();
+      // Try multiple methods to get the language
+      String? languageName = await LocalStorageService.getUserPreferredLanguageName();
       
-      // If we have a saved language, use it; otherwise keep default
+      // If not found, try the quick method
+      if (languageName == null || languageName.isEmpty) {
+        languageName = await LocalStorageService.getUserLanguageNameQuickly();
+      }
+      
+      // If we have a saved language, use it
       if (languageName != null && languageName.isNotEmpty) {
         return languageName;
       }
       
       // If language was selected before but not found, try to get from code
       final languageCode = await LocalStorageService.getUserPreferredLanguageCode();
-      if (languageCode != null) {
+      if (languageCode != null && languageCode.isNotEmpty) {
         final languageNameFromCode = LocalStorageService.getLanguageNameFromCode(languageCode);
         if (languageNameFromCode != null && languageNameFromCode.isNotEmpty) {
-          // Save it back to fix the issue
+          // Save it back to fix the issue and ensure persistence
           await LocalStorageService.saveUserLanguagePreference(languageNameFromCode, languageCode);
           return languageNameFromCode;
         }
       }
       
-      // Fallback to default only if truly no language found
+      // CRITICAL: If language was selected but not found, this is a data corruption issue
+      // Try to recover by checking all possible keys
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      
+      // Check both keys directly
+      final userLang = prefs.getString('user_language');
+      final selectedLang = prefs.getString('selected_language');
+      
+      if (userLang != null && userLang.isNotEmpty) {
+        // Found it! Save it properly
+        final langCode = LocalStorageService.getLanguageCodeFromName(userLang);
+        await LocalStorageService.saveUserLanguagePreference(userLang, langCode);
+        return userLang;
+      }
+      
+      if (selectedLang != null && selectedLang.isNotEmpty) {
+        // Found it! Save it properly
+        final langCode = LocalStorageService.getLanguageCodeFromName(selectedLang);
+        await LocalStorageService.saveUserLanguagePreference(selectedLang, langCode);
+        return selectedLang;
+      }
+      
+      // Last resort: if flag is set but no language found, keep default but log the issue
+      // This should not happen if saving worked correctly
       return _defaultLanguage;
     } catch (e) {
+      // On error, return default
       return _defaultLanguage;
     }
   }

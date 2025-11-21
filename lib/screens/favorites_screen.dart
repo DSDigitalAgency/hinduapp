@@ -27,6 +27,13 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 6, vsync: this);
+    // Listen to tab changes to refresh the lists
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) {
+        // Tab is changing, refresh the current tab's list
+        setState(() {});
+      }
+    });
   }
 
   @override
@@ -101,10 +108,15 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   }
 
   Widget _buildFavoritesList(String filter) {
+    // Create a new future each time this method is called to ensure fresh data
+    // This ensures each tab gets its own filtered data
+    final future = filter == 'all' 
+        ? _favoritesService.getAllFavorites()
+        : _favoritesService.getFavoritesByType(filter);
+    
     return FutureBuilder<List<Map<String, dynamic>>>(
-      future: filter == 'all' 
-          ? _favoritesService.getAllFavorites()
-          : _favoritesService.getFavoritesByType(filter),
+      key: ValueKey('favorites_$filter'), // Unique key for each filter to ensure proper rebuild
+      future: future,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Center(
@@ -184,7 +196,11 @@ class _FavoritesScreenState extends State<FavoritesScreen>
 
         return RefreshIndicator(
           onRefresh: () async {
-            setState(() {}); // Refresh the list
+            // Force rebuild by calling setState
+            // The ValueKey will ensure FutureBuilder gets a fresh future
+            if (mounted) {
+              setState(() {});
+            }
           },
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
@@ -277,60 +293,113 @@ class _FavoritesScreenState extends State<FavoritesScreen>
   }
 
   void _navigateToItem(String itemId, String itemType) async {
+    if (itemId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid item ID'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     switch (itemType) {
       case 'biography':
-        // For biographies, we need to create a map with the ID
-        final biographyData = {
-          'id': itemId,
-          '_id': itemId,
-          'biographyId': itemId,
-        };
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BiographyReadingScreen(
-              title: biographyData['title'] ?? 'Biography',
-              content: biographyData['description'] ?? 'Biography content',
+        // For biographies, pass the itemId as biographyId - the screen will load it
+        try {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => BiographyReadingScreen(
+                title: '', // Will be loaded by the screen
+                biographyId: itemId, // Pass the stored ID as biographyId
+              ),
             ),
-          ),
-        );
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error opening biography: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
         break;
       case 'temple':
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TempleReadingScreen(
-              templeId: itemId,
+        try {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => TempleReadingScreen(
+                templeId: itemId,
+              ),
             ),
-          ),
-        );
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error opening temple: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
         break;
       case 'sacredText':
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => SacredTextReadingScreen(
-              sacredTextId: itemId,
+        try {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => SacredTextReadingScreen(
+                sacredTextId: itemId,
+              ),
             ),
-          ),
-        );
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error opening sacred text: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
         break;
       case 'video':
         // For videos, we need to create a VideoModel from the favorite data
-        final videoData = {
-          'id': itemId,
-          'videourl': 'https://www.youtube.com/watch?v=$itemId', // Assuming itemId is YouTube ID
-          'title': 'Hindu Devotional Video',
-          'description': 'Watch this spiritual and devotional content',
-        };
-        
-        final videoModel = VideoModel.fromJson(videoData);
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VideoPlayerScreen(video: videoModel),
-          ),
-        );
+        try {
+          final videoData = {
+            'id': itemId,
+            'videourl': 'https://www.youtube.com/watch?v=$itemId', // Assuming itemId is YouTube ID
+            'title': 'Hindu Devotional Video',
+            'description': 'Watch this spiritual and devotional content',
+          };
+          
+          final videoModel = VideoModel.fromJson(videoData);
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => VideoPlayerScreen(video: videoModel),
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error opening video: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
         break;
       case 'post':
         // For posts, we need to fetch the full post data from API
@@ -373,6 +442,16 @@ class _FavoritesScreenState extends State<FavoritesScreen>
           }
         }
         break;
+      default:
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Unknown item type: $itemType'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        break;
     }
   }
 
@@ -380,7 +459,9 @@ class _FavoritesScreenState extends State<FavoritesScreen>
     try {
       await _favoritesService.removeFromFavorites(itemId);
       if (mounted) {
-        setState(() {}); // Refresh the list
+        // Force rebuild all tabs by calling setState
+        // The ValueKey in FutureBuilder will ensure each tab rebuilds with fresh data
+        setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Removed from favorites'),

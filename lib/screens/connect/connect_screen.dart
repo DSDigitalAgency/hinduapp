@@ -53,6 +53,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   static int _cachedCurrentPage = 1;
   static bool _cachedHasMoreData = true;
   static bool _cachedIsLoadingMore = false;
+  static int _cachedTotalResults = 0; // Store total results count from API
 
   // Instance variables for UI state
   List<PostModel> get _posts => _cachedPosts;
@@ -63,6 +64,7 @@ class _ConnectScreenState extends State<ConnectScreen>
   int get _currentPage => _cachedCurrentPage;
   bool get _hasMoreData => _cachedHasMoreData;
   bool get _isLoadingMore => _cachedIsLoadingMore;
+  int get _totalResults => _cachedTotalResults;
 
   // Search and sort variables
   String _searchQuery = '';
@@ -177,24 +179,56 @@ class _ConnectScreenState extends State<ConnectScreen>
 
       // Process API response
       List<Map<String, dynamic>> postData;
+      int totalCount = 0;
+      
       if (response is Map<String, dynamic> && response.containsKey('results')) {
         postData = ApiService.safeCastToList(response, 'results');
+        // Extract total count from metadata or response
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('posts')) {
         postData = ApiService.safeCastToList(response, 'posts');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('data')) {
         postData = ApiService.safeCastToList(response, 'data');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('blogs')) {
         postData = ApiService.safeCastToList(response, 'blogs');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else {
         if (response is List) {
           postData = response.whereType<Map<String, dynamic>>().toList();
+          totalCount = postData.length;
         } else {
           postData = [];
+          totalCount = 0;
         }
       }
+      
+      // Store total count
+      _cachedTotalResults = totalCount;
 
       // Debug: Log the first few post titles and available fields to see if sorting is working
       if (postData.isNotEmpty) {
@@ -407,14 +441,12 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
     }
 
-    // Since we're now getting sorted data from the API, we don't need to sort locally
-    // Just apply search filtering if there's a search query
+    // If there's a search query, the API should handle it, so don't filter locally
+    // Only apply local filtering/sorting when there's no active search
     List<PostModel> filtered = List.from(deduplicatedPosts);
 
-    if (_searchQuery.isNotEmpty) {
-      filtered = _sortBySearchRelevance(filtered, _searchQuery);
-    }
-
+    // Don't apply local search filtering - API handles search
+    // Only sort if needed (but API should already sort)
     setState(() {
       _cachedFilteredPosts = filtered;
     });
@@ -457,25 +489,54 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
 
       List<Map<String, dynamic>> postData;
+      int totalCount = 0;
+      
       if (response is Map<String, dynamic> && response.containsKey('results')) {
         postData = ApiService.safeCastToList(response, 'results');
+        // Extract total count from metadata or response
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('posts')) {
         postData = ApiService.safeCastToList(response, 'posts');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('data')) {
         postData = ApiService.safeCastToList(response, 'data');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else if (response is Map<String, dynamic> &&
           response.containsKey('blogs')) {
         postData = ApiService.safeCastToList(response, 'blogs');
+        final metadata = response['metadata'];
+        if (metadata != null && metadata is Map<String, dynamic>) {
+          totalCount = metadata['total'] ?? metadata['totalCount'] ?? postData.length;
+        } else {
+          totalCount = response['total'] ?? response['totalCount'] ?? postData.length;
+        }
       } else {
         postData = [];
+        totalCount = 0;
       }
 
       if (postData.isEmpty) {
         setState(() {
           _cachedPosts = [];
           _cachedFilteredPosts = [];
+          _cachedTotalResults = 0;
           _isLoading = false;
           _cachedErrorMessage = 'No results found for "$_searchQuery"';
         });
@@ -483,11 +544,14 @@ class _ConnectScreenState extends State<ConnectScreen>
       }
 
       final newPosts = await _processPostsWithContentFetching(postData);
+      // Don't re-sort search results - API already returns them sorted by relevance
+      // Only apply relevance sorting if API doesn't handle it well
       final sortedPosts = _sortBySearchRelevance(newPosts, _searchQuery);
 
       setState(() {
         _cachedPosts = sortedPosts;
         _cachedFilteredPosts = sortedPosts;
+        _cachedTotalResults = totalCount;
         _isLoading = false;
         _cachedCurrentPage = 1;
       });
@@ -577,8 +641,10 @@ class _ConnectScreenState extends State<ConnectScreen>
       if (!_isSearchExpanded) {
         _searchController.clear();
         _searchQuery = '';
+        _cachedTotalResults = 0;
+        // Reload posts when search is closed
         if (_cachedFilteredPosts.length != _cachedPosts.length) {
-          _performSearch();
+          _loadPosts();
         }
       }
     });
@@ -1061,9 +1127,11 @@ class _ConnectScreenState extends State<ConnectScreen>
               SearchResultsIndicator(
                 searchQuery: _searchQuery,
                 filteredPostsLength: _filteredPosts.length,
+                totalResults: _totalResults,
                 onClearSearch: () {
                   _searchController.clear();
                   _searchQuery = '';
+                  _cachedTotalResults = 0;
                   if (_cachedFilteredPosts.length != _cachedPosts.length) {
                     _performSearch();
                   }

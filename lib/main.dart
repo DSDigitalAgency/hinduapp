@@ -14,6 +14,7 @@ import 'screens/language_selection_screen.dart';
 import 'models/sacred_text_model.dart';
 import 'constants/app_theme.dart';
 import 'providers/reading_settings_provider.dart';
+import 'providers/language_provider.dart';
 import 'services/local_storage_service.dart';
 import 'services/deferred_deep_link_service.dart';
 
@@ -22,6 +23,47 @@ void main() async {
   
   // Initialize logger service first
   logger.initialize();
+  
+  // CRITICAL: Load preferred language FIRST before anything else
+  try {
+    // Refresh cache to ensure we have latest data from disk
+    await LocalStorageService.refreshPrefsCache();
+    
+    // Check and fix language inconsistencies
+    await LocalStorageService.checkAndFixLanguageConsistency();
+    
+    // Try to get language quickly
+    String? language = await LocalStorageService.getUserLanguageNameQuickly();
+    
+    // If not found, try full method
+    if (language == null || language.isEmpty) {
+      final isLanguageSelected = await LocalStorageService.isLanguageSelected();
+      if (isLanguageSelected) {
+        language = await LocalStorageService.getUserPreferredLanguageName();
+        if (language == null || language.isEmpty) {
+          // Try to get from code
+          final languageCode = await LocalStorageService.getUserPreferredLanguageCode();
+          if (languageCode != null && languageCode.isNotEmpty) {
+            language = LocalStorageService.getLanguageNameFromCode(languageCode);
+            if (language != null && language.isNotEmpty) {
+              // Save it back to ensure persistence
+              await LocalStorageService.saveUserLanguagePreference(language, languageCode);
+            }
+          }
+        }
+      }
+    }
+    
+    // Store pre-loaded language (or use default)
+    final loadedLanguage = language ?? 'Devanagari (Hindi)';
+    LocalStorageService.setPreloadedLanguage(loadedLanguage);
+    
+    // Ensure language is synchronized
+    await LocalStorageService.synchronizeLanguagePreferences(loadedLanguage);
+  } catch (e) {
+    // On error, use default language
+    LocalStorageService.setPreloadedLanguage('Devanagari (Hindi)');
+  }
   
   // Completely disable Flutter error handling to prevent loops
   FlutterError.onError = null;

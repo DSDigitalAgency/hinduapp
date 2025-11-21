@@ -156,7 +156,10 @@ class _BiographyReadingScreenState extends ConsumerState<BiographyReadingScreen>
     if (_biography == null) return;
     
     try {
-      final isFavorite = await _favoritesService.isFavorited(_biography!.id);
+      // Check both biographyId and id to handle cases where favorite was saved with either
+      final biographyId = _biography!.biographyId ?? _biography!.id;
+      final isFavorite = await _favoritesService.isFavorited(biographyId) || 
+                        (biographyId != _biography!.id && await _favoritesService.isFavorited(_biography!.id));
       if (mounted) {
         setState(() {
           _isFavorite = isFavorite;
@@ -172,11 +175,24 @@ class _BiographyReadingScreenState extends ConsumerState<BiographyReadingScreen>
     if (_biography == null) return;
     
     try {
+      // Use biographyId if available, otherwise use id
+      final biographyId = _biography!.biographyId ?? _biography!.id;
+      
       if (_isFavorite) {
-        await _favoritesService.removeFromFavorites(_biography!.id);
+        // Try both IDs when removing (in case the favorite was saved with a different ID)
+        try {
+          await _favoritesService.removeFromFavorites(biographyId);
+        } catch (e) {
+          // If removal fails with biographyId, try with id
+          if (biographyId != _biography!.id) {
+            await _favoritesService.removeFromFavorites(_biography!.id);
+          } else {
+            rethrow;
+          }
+        }
       } else {
         await _favoritesService.addToFavorites(
-          itemId: _biography!.id,
+          itemId: biographyId, // Use biographyId if available for consistency
           itemType: 'biography',
           title: _biography!.displayTitle,
           description: _biography!.contentPreview,

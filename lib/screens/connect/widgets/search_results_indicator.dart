@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 class SearchResultsIndicator extends StatelessWidget {
   final String searchQuery;
   final int filteredPostsLength;
+  final int totalResults;
   final VoidCallback onClearSearch;
 
   const SearchResultsIndicator({
     super.key,
     required this.searchQuery,
     required this.filteredPostsLength,
+    required this.totalResults,
     required this.onClearSearch,
   });
 
@@ -50,7 +52,9 @@ class SearchResultsIndicator extends StatelessWidget {
                 Text(
                   filteredPostsLength == 0
                       ? 'No results found for "$searchQuery"'
-                      : 'Found $filteredPostsLength result${filteredPostsLength == 1 ? '' : 's'} for "$searchQuery"',
+                      : totalResults > 0 && totalResults > filteredPostsLength
+                          ? 'Showing $filteredPostsLength out of $totalResults results'
+                          : 'Found $filteredPostsLength result${filteredPostsLength == 1 ? '' : 's'} for "$searchQuery"',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,

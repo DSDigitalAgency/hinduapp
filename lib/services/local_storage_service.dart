@@ -15,6 +15,19 @@ class LocalStorageService {
   
   // Cache SharedPreferences instance for faster language access
   static SharedPreferences? _cachedPrefs;
+  
+  // Store pre-loaded language from main() for immediate access
+  static String? _preloadedLanguage;
+  
+  /// Set pre-loaded language (called from main() before app starts)
+  static void setPreloadedLanguage(String language) {
+    _preloadedLanguage = language;
+  }
+  
+  /// Get pre-loaded language (called by language provider)
+  static String? getPreloadedLanguage() {
+    return _preloadedLanguage;
+  }
 
   /// Get SharedPreferences instance (cached for performance)
   static Future<SharedPreferences> _getPrefs() async {
@@ -90,27 +103,67 @@ class LocalStorageService {
   /// Synchronize all language preferences to a single value
   static Future<void> synchronizeLanguagePreferences(String language) async {
     try {
-      // Get a fresh instance to ensure we're working with latest data
-      final prefs = await SharedPreferences.getInstance();
       final languageCode = getLanguageCodeFromName(language);
+      
+      // CRITICAL: Use a loop to ensure the save succeeds
+      int attempts = 0;
+      const maxAttempts = 3;
+      bool saved = false;
+      
+      while (!saved && attempts < maxAttempts) {
+        attempts++;
+        
+        // Get a fresh instance to ensure we're working with latest data
+        final prefs = await SharedPreferences.getInstance();
 
-      // Set both user and selected language to the same value
-      await prefs.setString(_userLanguageKey, language);
-      await prefs.setString(_userLanguageCodeKey, languageCode);
-      await prefs.setString(_selectedLanguageKey, language);
-      await prefs.setString(_selectedLanguageCodeKey, languageCode);
+        // Set both user and selected language to the same value
+        final setUserLang = await prefs.setString(_userLanguageKey, language);
+        final setUserCode = await prefs.setString(_userLanguageCodeKey, languageCode);
+        final setSelectedLang = await prefs.setString(_selectedLanguageKey, language);
+        final setSelectedCode = await prefs.setString(_selectedLanguageCodeKey, languageCode);
+        final setFlag = await prefs.setBool(_languageSelectedKey, true);
+        
+        // Check if all sets succeeded
+        if (setUserLang && setUserCode && setSelectedLang && setSelectedCode && setFlag) {
+          // CRITICAL: Force reload to ensure data is written to disk
+          await prefs.reload();
+          
+          // CRITICAL: Verify the save by reading back immediately
+          await Future.delayed(const Duration(milliseconds: 100));
+          
+          final verifyPrefs = await SharedPreferences.getInstance();
+          await verifyPrefs.reload();
+          
+          final savedUserLang = verifyPrefs.getString(_userLanguageKey);
+          final savedSelectedLang = verifyPrefs.getString(_selectedLanguageKey);
+          final savedFlag = verifyPrefs.getBool(_languageSelectedKey) ?? false;
+          
+          if (savedUserLang == language && savedSelectedLang == language && savedFlag) {
+            // Success! Update cached instance
+            _cachedPrefs = verifyPrefs;
+            saved = true;
+          } else {
+            // Not saved correctly, wait a bit longer and retry
+            await Future.delayed(const Duration(milliseconds: 200));
+          }
+        } else {
+          // Some sets failed, wait and retry
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
       
-      // Ensure language selected flag is set to true if we have a language
-      await prefs.setBool(_languageSelectedKey, true);
-
-      // CRITICAL: Add small delay to ensure write operations complete before app can be killed
-      await Future.delayed(const Duration(milliseconds: 150));
-      
-      // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
-      await prefs.reload();
-      
-      // Update cached instance
-      _cachedPrefs = prefs;
+      // If still not saved after max attempts, try one more time with a longer delay
+      if (!saved) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_userLanguageKey, language);
+        await prefs.setString(_userLanguageCodeKey, languageCode);
+        await prefs.setString(_selectedLanguageKey, language);
+        await prefs.setString(_selectedLanguageCodeKey, languageCode);
+        await prefs.setBool(_languageSelectedKey, true);
+        await Future.delayed(const Duration(milliseconds: 300));
+        await prefs.reload();
+        _cachedPrefs = prefs;
+      }
       
       // Verify synchronization
       await debugLanguagePreferences();
@@ -580,14 +633,29 @@ class LocalStorageService {
     // Ensure language selected flag is set to true
     await prefs.setBool(_languageSelectedKey, true);
     
-    // CRITICAL: Add small delay to ensure write operations complete before app can be killed
-    await Future.delayed(const Duration(milliseconds: 150));
+    // CRITICAL: Add delay to ensure write operations complete before app can be killed
+    await Future.delayed(const Duration(milliseconds: 200));
     
     // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
     await prefs.reload();
     
+    // CRITICAL: Verify the save by reading back immediately
+    final verifyPrefs = await SharedPreferences.getInstance();
+    await verifyPrefs.reload();
+    final savedLanguage = verifyPrefs.getString(_userLanguageKey);
+    if (savedLanguage != language) {
+      // If not saved correctly, try again
+      await verifyPrefs.setString(_userLanguageKey, language);
+      await verifyPrefs.setString(_userLanguageCodeKey, languageCode);
+      await verifyPrefs.setString(_selectedLanguageKey, language);
+      await verifyPrefs.setString(_selectedLanguageCodeKey, languageCode);
+      await verifyPrefs.setBool(_languageSelectedKey, true);
+      await Future.delayed(const Duration(milliseconds: 200));
+      await verifyPrefs.reload();
+    }
+    
     // Update cached instance
-    _cachedPrefs = prefs;
+    _cachedPrefs = verifyPrefs;
   }
 
   /// Check if language has been selected (first launch check)
@@ -630,14 +698,29 @@ class LocalStorageService {
     // Ensure language selected flag is set to true
     await prefs.setBool(_languageSelectedKey, true);
     
-    // CRITICAL: Add small delay to ensure write operations complete before app can be killed
-    await Future.delayed(const Duration(milliseconds: 150));
+    // CRITICAL: Add delay to ensure write operations complete before app can be killed
+    await Future.delayed(const Duration(milliseconds: 200));
     
     // CRITICAL: Force reload to ensure we have the latest data and it's written to disk
     await prefs.reload();
     
+    // CRITICAL: Verify the save by reading back immediately
+    final verifyPrefs = await SharedPreferences.getInstance();
+    await verifyPrefs.reload();
+    final savedLanguage = verifyPrefs.getString(_selectedLanguageKey);
+    if (savedLanguage != language) {
+      // If not saved correctly, try again
+      await verifyPrefs.setString(_selectedLanguageKey, language);
+      await verifyPrefs.setString(_selectedLanguageCodeKey, languageCode);
+      await verifyPrefs.setString(_userLanguageKey, language);
+      await verifyPrefs.setString(_userLanguageCodeKey, languageCode);
+      await verifyPrefs.setBool(_languageSelectedKey, true);
+      await Future.delayed(const Duration(milliseconds: 200));
+      await verifyPrefs.reload();
+    }
+    
     // Update cached instance
-    _cachedPrefs = prefs;
+    _cachedPrefs = verifyPrefs;
   }
 
   // Clear all language preferences
